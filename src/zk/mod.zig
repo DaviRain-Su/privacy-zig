@@ -16,6 +16,9 @@ const merkle = @import("../crypto/merkle.zig");
 // Re-export Groth16 verification module
 pub const groth16 = @import("groth16.zig");
 
+// Re-export Privacy Cash verification key
+pub const privacy_cash_vk = @import("privacy_cash_vk.zig");
+
 /// Groth16 proof (256 bytes for BN254)
 pub const Groth16Proof = struct {
     /// Proof points (A, B, C)
@@ -390,4 +393,10 @@ test "zk: public inputs serialization" {
     defer allocator.free(bytes);
 
     try std.testing.expectEqual(@as(usize, 64), bytes.len);
+}
+
+test {
+    // Reference sub-module tests
+    _ = groth16;
+    _ = privacy_cash_vk;
 }
