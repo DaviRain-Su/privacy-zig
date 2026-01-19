@@ -226,20 +226,18 @@ const TransactAccounts = struct {
 // ============================================================================
 
 const builtin = @import("builtin");
+const syscalls = sol.syscalls;
 
 /// Check if running on Solana BPF/SBF (where syscalls are available)
 const is_bpf_program = !builtin.is_test and
     ((builtin.os.tag == .freestanding and builtin.cpu.arch == .bpfel) or
     builtin.cpu.arch == .sbf);
 
-/// Poseidon parameter set for BN254 with x^5 S-box
+/// Poseidon parameter set for BN254 with x^5 S-box (Light Protocol compatible)
 const POSEIDON_PARAMS_BN254_X5: u64 = 0;
 
 /// Big-endian mode for Poseidon syscall
 const POSEIDON_ENDIANNESS_BE: u64 = 0;
-
-/// Solana Poseidon syscall
-const sol_poseidon = @as(*align(1) const fn (u64, u64, [*]const u8, u64, [*]u8) callconv(.c) u64, @ptrFromInt(0xc4947c21));
 
 /// Poseidon hash of two 32-byte inputs
 /// Uses Solana syscall on-chain, software implementation off-chain/tests
@@ -259,7 +257,8 @@ fn poseidonHash2Syscall(left: [32]u8, right: [32]u8) [32]u8 {
 
     var result: [32]u8 = undefined;
 
-    const ret = sol_poseidon(
+    // Use syscall from solana-program-sdk-zig
+    const ret = syscalls.sol_poseidon(
         POSEIDON_PARAMS_BN254_X5,
         POSEIDON_ENDIANNESS_BE,
         &input,
