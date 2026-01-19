@@ -62,8 +62,41 @@ pub fn build(b: *std.Build) void {
     const examples_step = b.step("examples", "Run example tests");
     examples_step.dependOn(&run_examples_test.step);
 
+    // Anonymous transfer example
+    const anon_transfer = b.addExecutable(.{
+        .name = "anonymous_transfer",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/anonymous_transfer.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "privacy_zig", .module = privacy_mod },
+            },
+        }),
+    });
+    b.installArtifact(anon_transfer);
+
+    // Run anonymous transfer example
+    const run_anon = b.addRunArtifact(anon_transfer);
+    const anon_step = b.step("anon", "Run anonymous transfer example");
+    anon_step.dependOn(&run_anon.step);
+
+    // Test anonymous transfer
+    const anon_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/anonymous_transfer.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "privacy_zig", .module = privacy_mod },
+            },
+        }),
+    });
+    const run_anon_test = b.addRunArtifact(anon_test);
+
     // Run all tests including examples
     const all_test_step = b.step("test-all", "Run all tests including examples");
     all_test_step.dependOn(&run_tests.step);
     all_test_step.dependOn(&run_examples_test.step);
+    all_test_step.dependOn(&run_anon_test.step);
 }
