@@ -4,12 +4,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Get solana-program-sdk dependency
+    const solana_sdk_dep = b.dependency("solana_program_sdk", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const solana_sdk_mod = solana_sdk_dep.module("solana_program_sdk");
+
     // SDK module for dependents
-    _ = b.addModule("privacy_zig", .{
+    const privacy_mod = b.addModule("privacy_zig", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    privacy_mod.addImport("solana_program_sdk", solana_sdk_mod);
 
     // Tests
     const tests = b.addTest(.{
@@ -17,6 +25,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "solana_program_sdk", .module = solana_sdk_mod },
+            },
         }),
     });
 
