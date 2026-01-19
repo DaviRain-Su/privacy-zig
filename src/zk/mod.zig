@@ -13,6 +13,9 @@ const std = @import("std");
 const poseidon = @import("../crypto/poseidon.zig");
 const merkle = @import("../crypto/merkle.zig");
 
+// Re-export Groth16 verification module
+pub const groth16 = @import("groth16.zig");
+
 /// Groth16 proof (256 bytes for BN254)
 pub const Groth16Proof = struct {
     /// Proof points (A, B, C)
