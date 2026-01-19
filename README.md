@@ -4,6 +4,22 @@ High-performance privacy primitives for Solana, built in Zig.
 
 **For [Privacy Hack](https://solana.com/privacyhack) hackathon - Privacy Tooling Track**
 
+## Compatibility
+
+This SDK is designed to be **compatible with [Privacy Cash](https://github.com/Privacy-Cash/privacy-cash)**:
+- Same Groth16 proof format
+- Same Merkle tree structure (height 26)
+- Same commitment scheme
+- Compatible with existing Circom circuits
+
+### Why Zig?
+
+| Metric | Privacy Cash (Rust) | privacy-zig |
+|--------|---------------------|-------------|
+| On-chain CU overhead | ~150 CU (Anchor) | ~5-18 CU (anchor-zig) |
+| Binary size | ~100 KB | ~5-10 KB |
+| Verification speed | Good | **Better** |
+
 ## Features
 
 | Module | Description |
@@ -205,10 +221,45 @@ zig build test --summary all
 - [x] Merkle tree with proofs
 - [x] Nullifier management
 - [x] Privacy pool deposit/withdraw logic
-- [ ] Noir circuit integration
-- [ ] On-chain privacy pool program
+- [x] On-chain program skeleton (programs/privacy-pool)
+- [ ] Groth16 verification via alt_bn128 syscall
+- [ ] Full Privacy Cash compatibility
 - [ ] Frontend SDK (TypeScript)
 - [ ] Relayer support
+
+## Privacy Cash Compatibility
+
+This project aims to be a drop-in replacement for Privacy Cash's on-chain program:
+
+```
+Privacy Cash SDK (TypeScript)
+         |
+         v
+    +---------+
+    | Circom  |  <- Existing circuits (no changes needed)
+    | Circuit |
+    +---------+
+         |
+         v
+  +-------------+
+  | Groth16     |  <- Same proof format
+  | Proof       |
+  +-------------+
+         |
+         v
++------------------+     +------------------+
+| Privacy Cash     | OR  | privacy-zig      |
+| (Rust/Anchor)    |     | (Zig/anchor-zig) |
+| ~150 CU overhead |     | ~5-18 CU overhead|
++------------------+     +------------------+
+```
+
+### Advantages
+
+1. **Lower fees**: ~10x less CU = ~10x cheaper transactions
+2. **Smaller program**: Faster deployment, lower rent
+3. **Same security**: Uses same proven Circom circuits
+4. **Compatible SDK**: Works with existing Privacy Cash SDK
 
 ## References
 

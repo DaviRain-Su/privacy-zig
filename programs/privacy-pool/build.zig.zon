@@ -1,0 +1,21 @@
+.{
+    .name = .privacy_pool,
+    .version = "0.1.0",
+    .fingerprint = 0xe93ebd983124164c,
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{
+        .solana_program_sdk = .{
+            .url = "https://github.com/DaviRain-Su/solana-program-sdk-zig/archive/refs/heads/dev.tar.gz",
+            .hash = "solana_program_sdk-0.17.1-wGj9ULn8EQAEuGqSZ32Y_DWBmgZwoHGkE4JrotUgqbuy",
+        },
+        .sol_anchor_zig = .{
+            .url = "https://github.com/DaviRain-Su/anchor-zig/archive/refs/heads/main.tar.gz",
+            .hash = "1220948c7ee390a9f52af827ea4b9566d5bc8fee74adfdd16b952964fd723a19a1d8",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
