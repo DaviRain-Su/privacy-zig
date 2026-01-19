@@ -474,12 +474,13 @@ pub fn insertLeaf(tree: *TreeAccount, leaf: [32]u8) ![32]u8 {
     var current = leaf;
     var current_index = index;
 
-    for (0..tree.height) |level| {
-        const level_u8: u8 = @truncate(level);
+    // Use while loop to avoid comptime unrolling
+    var level: u8 = 0;
+    while (level < tree.height) : (level += 1) {
         if (current_index % 2 == 0) {
             // Left child - update filled subtree
             tree.filled_subtrees[level] = current;
-            current = poseidonHash2(current, zeroHash(level_u8));
+            current = poseidonHash2(current, zeroHash(level));
         } else {
             // Right child - use filled subtree
             current = poseidonHash2(tree.filled_subtrees[level], current);
@@ -839,15 +840,21 @@ noinline fn initializeHandler(ctx: *const zero.Ctx(InitializeAccounts)) !void {
     tree_account.height = MERKLE_TREE_HEIGHT;
     tree_account.root_history_size = ROOT_HISTORY_SIZE;
 
-    // Initialize Merkle tree with zero hashes
-    for (0..MERKLE_TREE_HEIGHT) |level| {
-        tree_account.filled_subtrees[level] = zeroHash(@truncate(level));
+    // Initialize Merkle tree with zero hashes (use while to avoid code bloat)
+    {
+        var level: u8 = 0;
+        while (level < MERKLE_TREE_HEIGHT) : (level += 1) {
+            tree_account.filled_subtrees[level] = zeroHash(level);
+        }
     }
 
     // Set initial root (empty tree root)
     var current = zeroHash(0);
-    for (0..MERKLE_TREE_HEIGHT) |level| {
-        current = poseidonHash2(current, zeroHash(@truncate(level)));
+    {
+        var level: u8 = 0;
+        while (level < MERKLE_TREE_HEIGHT) : (level += 1) {
+            current = poseidonHash2(current, zeroHash(level));
+        }
     }
     tree_account.root_history[0] = current;
 
@@ -1109,15 +1116,21 @@ noinline fn initializeTokenPoolHandler(ctx: *const zero.Ctx(InitializeTokenPoolA
     tree_account.height = MERKLE_TREE_HEIGHT;
     tree_account.root_history_size = ROOT_HISTORY_SIZE;
 
-    // Initialize Merkle tree with zero hashes
-    for (0..MERKLE_TREE_HEIGHT) |level| {
-        tree_account.filled_subtrees[level] = zeroHash(@truncate(level));
+    // Initialize Merkle tree with zero hashes (use while to avoid code bloat)
+    {
+        var level: u8 = 0;
+        while (level < MERKLE_TREE_HEIGHT) : (level += 1) {
+            tree_account.filled_subtrees[level] = zeroHash(level);
+        }
     }
 
     // Set initial root (empty tree root)
     var current = zeroHash(0);
-    for (0..MERKLE_TREE_HEIGHT) |level| {
-        current = poseidonHash2(current, zeroHash(@truncate(level)));
+    {
+        var level: u8 = 0;
+        while (level < MERKLE_TREE_HEIGHT) : (level += 1) {
+            current = poseidonHash2(current, zeroHash(level));
+        }
     }
     tree_account.root_history[0] = current;
 

@@ -2,8 +2,8 @@ const std = @import("std");
 const solana = @import("solana_program_sdk");
 
 pub fn build(b: *std.Build) void {
-    // For BPF program build
-    const optimize: std.builtin.OptimizeMode = .ReleaseFast;
+    // For BPF program build - use ReleaseSmall to avoid relative jump issues
+    const optimize: std.builtin.OptimizeMode = .ReleaseSmall;
     const target = b.resolveTargetQuery(solana.sbf_target);
 
     const sdk_dep = b.dependency("solana_program_sdk", .{

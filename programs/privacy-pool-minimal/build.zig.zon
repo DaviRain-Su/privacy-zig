@@ -1,0 +1,19 @@
+.{
+    .name = .privacy_pool_minimal,
+    .version = "0.1.0",
+    .fingerprint = 0x920c51a09e4e3a53,
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{
+        .solana_program_sdk = .{
+            .path = "../../../solana-program-sdk-zig",
+        },
+        .sol_anchor_zig = .{
+            .path = "../../../anchor-zig",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
