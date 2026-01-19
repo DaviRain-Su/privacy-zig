@@ -57,6 +57,9 @@ pub const transfer = @import("transfer/mod.zig");
 /// Zero-knowledge proof helpers
 pub const zk = @import("zk/mod.zig");
 
+/// Confidential payments - hide amounts on-chain
+pub const confidential = @import("confidential/mod.zig");
+
 // ============================================================================
 // Re-exports for convenience
 // ============================================================================
@@ -248,4 +251,5 @@ test {
     _ = nullifier;
     _ = transfer;
     _ = zk;
+    _ = confidential;
 }
