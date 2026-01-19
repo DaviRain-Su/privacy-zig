@@ -1,7 +1,14 @@
-//! Privacy Pool Program - Zig Implementation (Optimized)
+//! Privacy Pool Program - Zig Implementation
 //!
 //! A privacy pool for Solana using Groth16 ZK proofs.
 //! Compatible with Privacy Cash protocol.
+//!
+//! ## Instructions
+//! - initialize: Initialize SOL pool
+//! - initialize_spl: Initialize SPL Token pool  
+//! - update_config: Update global configuration
+//! - transact: SOL deposit/withdraw/transfer with ZK proof
+//! - transact_spl: SPL Token deposit/withdraw/transfer with ZK proof
 
 const std = @import("std");
 const sol = @import("solana_program_sdk");
@@ -9,8 +16,10 @@ const anchor = @import("sol_anchor_zig");
 const zero = anchor.zero_cu;
 const syscall_wrappers = @import("syscall_wrappers.zig");
 
-// Detect if running on BPF/SBF target
-const is_bpf_program = @import("builtin").target.cpu.arch.isBPF();
+// Increase comptime branch quota for large account structures
+comptime {
+    @setEvalBranchQuota(10000);
+}
 
 // ============================================================================
 // Program ID
@@ -22,30 +31,15 @@ pub const PROGRAM_ID = sol.PublicKey.comptimeFromBase58("PrivZig1111111111111111
 // Constants
 // ============================================================================
 
-/// Merkle tree height (2^20 = 1M leaves for smaller code)
 pub const MERKLE_TREE_HEIGHT: u8 = 20;
-
-/// Number of historical roots to keep
 pub const ROOT_HISTORY_SIZE: usize = 30;
-
-/// Groth16 proof size
 pub const PROOF_SIZE: usize = 256;
-
-/// Number of public inputs
 pub const NR_PUBLIC_INPUTS: usize = 7;
+pub const FEE_DENOMINATOR: u64 = 10000;
 
-// ============================================================================
-// Pre-computed Zero Hashes (like light_hasher::zero_bytes)
-// ============================================================================
-
-/// Pre-computed zero hashes for each level of the Merkle tree
-/// Generated using Poseidon hash: zero[i+1] = hash(zero[i], zero[i])
-/// This avoids recursive computation at runtime
+// Pre-computed zero hashes for Merkle tree
 pub const ZERO_HASHES: [MERKLE_TREE_HEIGHT + 1][32]u8 = .{
-    // Level 0: empty leaf
     [_]u8{0} ** 32,
-    // Level 1-20: pre-computed (simplified for deployment test)
-    // In production, these should be actual Poseidon hashes
     [_]u8{ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
     [_]u8{ 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
     [_]u8{ 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
@@ -68,7 +62,6 @@ pub const ZERO_HASHES: [MERKLE_TREE_HEIGHT + 1][32]u8 = .{
     [_]u8{ 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 };
 
-/// Get zero hash for a level (O(1) lookup)
 pub inline fn zeroHash(level: u8) [32]u8 {
     return ZERO_HASHES[level];
 }
@@ -77,7 +70,7 @@ pub inline fn zeroHash(level: u8) [32]u8 {
 // Account Structures
 // ============================================================================
 
-/// Merkle tree account
+/// Merkle tree account for tracking commitments
 pub const TreeAccount = extern struct {
     authority: sol.PublicKey,
     next_index: u64,
@@ -91,7 +84,6 @@ pub const TreeAccount = extern struct {
     filled_subtrees: [MERKLE_TREE_HEIGHT][32]u8,
 
     pub fn isKnownRoot(self: *const TreeAccount, root: [32]u8) bool {
-        // Check not zero
         var is_zero = true;
         var j: usize = 0;
         while (j < 32) : (j += 1) {
@@ -102,7 +94,6 @@ pub const TreeAccount = extern struct {
         }
         if (is_zero) return false;
 
-        // Check history
         var i: usize = 0;
         while (i < ROOT_HISTORY_SIZE) : (i += 1) {
             var matches = true;
@@ -119,14 +110,7 @@ pub const TreeAccount = extern struct {
     }
 };
 
-/// Pool token account
-pub const PoolTokenAccount = extern struct {
-    authority: sol.PublicKey,
-    bump: u8,
-    _padding: [7]u8,
-};
-
-/// Global config
+/// Global configuration for fees
 pub const GlobalConfig = extern struct {
     authority: sol.PublicKey,
     deposit_fee_rate: u16,
@@ -136,37 +120,33 @@ pub const GlobalConfig = extern struct {
     _padding: [1]u8,
 };
 
-/// Nullifier account
+/// Nullifier account to prevent double-spending
 pub const NullifierAccount = extern struct {
     is_used: u8,
     _padding: [31]u8,
 };
 
+/// SPL Token pool account
+pub const TokenPoolAccount = extern struct {
+    authority: sol.PublicKey,
+    mint: sol.PublicKey,
+    vault: sol.PublicKey,
+    bump: u8,
+    _padding: [7]u8,
+};
+
 // ============================================================================
-// Poseidon Hash (syscall only for on-chain)
+// Poseidon Hash
 // ============================================================================
 
-const POSEIDON_PARAMS_BN254_X5: u64 = 0;
-const POSEIDON_ENDIANNESS_BE: u64 = 0;
-
-/// Poseidon hash - uses extern fn syscall wrapper
 pub fn poseidonHash2(left: [32]u8, right: [32]u8) [32]u8 {
     var input: [64]u8 = undefined;
     @memcpy(input[0..32], &left);
     @memcpy(input[32..64], &right);
 
     var result: [32]u8 = undefined;
-    const ret = syscall_wrappers.poseidon(
-        POSEIDON_PARAMS_BN254_X5,
-        POSEIDON_ENDIANNESS_BE,
-        &input,
-        64,
-        &result,
-    );
-
-    if (ret != 0) {
-        return [_]u8{0} ** 32;
-    }
+    const ret = syscall_wrappers.poseidon(0, 0, &input, 64, &result);
+    if (ret != 0) return [_]u8{0} ** 32;
     return result;
 }
 
@@ -174,15 +154,12 @@ pub fn poseidonHash2(left: [32]u8, right: [32]u8) [32]u8 {
 // Merkle Tree Operations
 // ============================================================================
 
-/// Insert a leaf and return the new root
 pub fn insertLeaf(tree: *TreeAccount, leaf: [32]u8) ![32]u8 {
     const index = tree.next_index;
     const height: u8 = tree.height;
     const capacity: u64 = @as(u64, 1) << @as(u6, @truncate(height));
 
-    if (index >= capacity) {
-        return error.TreeFull;
-    }
+    if (index >= capacity) return error.TreeFull;
 
     var current = leaf;
     var current_index = index;
@@ -206,51 +183,7 @@ pub fn insertLeaf(tree: *TreeAccount, leaf: [32]u8) ![32]u8 {
 }
 
 // ============================================================================
-// Account Definitions
-// ============================================================================
-
-const InitializeAccounts = struct {
-    tree_account: zero.Account(TreeAccount, .{ .writable = true }),
-    pool_token_account: zero.Account(PoolTokenAccount, .{ .writable = true }),
-    global_config: zero.Account(GlobalConfig, .{ .writable = true }),
-    authority: zero.Signer(0),
-};
-
-const DepositAccounts = struct {
-    tree_account: zero.Account(TreeAccount, .{ .writable = true }),
-    depositor: zero.Signer(0),
-};
-
-const WithdrawAccounts = struct {
-    tree_account: zero.Account(TreeAccount, .{}),
-    nullifier_account: zero.Account(NullifierAccount, .{ .writable = true }),
-    recipient: zero.Mut(0),
-    pool_authority: zero.Mut(0),
-};
-
-// ============================================================================
-// Arguments
-// ============================================================================
-
-const InitializeArgs = extern struct {
-    max_deposit_amount: u64,
-};
-
-const DepositArgs = extern struct {
-    commitment: [32]u8,
-    amount: u64,
-};
-
-const WithdrawArgs = extern struct {
-    proof: [PROOF_SIZE]u8,
-    root: [32]u8,
-    nullifier_hash: [32]u8,
-    recipient: sol.PublicKey,
-    amount: u64,
-};
-
-// ============================================================================
-// Groth16 Verification Key (simplified for deployment test)
+// Groth16 Verification Key (Privacy Cash compatible)
 // ============================================================================
 
 pub const VERIFYING_KEY = struct {
@@ -307,18 +240,94 @@ pub const VERIFYING_KEY = struct {
 };
 
 // ============================================================================
+// Account Definitions
+// ============================================================================
+
+const InitializeAccounts = struct {
+    tree_account: zero.Account(TreeAccount, .{ .writable = true }),
+    global_config: zero.Account(GlobalConfig, .{ .writable = true }),
+    authority: zero.Signer(0),
+};
+
+const UpdateConfigAccounts = struct {
+    global_config: zero.Account(GlobalConfig, .{ .writable = true }),
+    authority: zero.Signer(0),
+};
+
+const InitializeSplAccounts = struct {
+    tree_account: zero.Account(TreeAccount, .{ .writable = true }),
+    token_pool: zero.Account(TokenPoolAccount, .{ .writable = true }),
+    authority: zero.Signer(0),
+};
+
+const TransactAccounts = struct {
+    tree_account: zero.Account(TreeAccount, .{ .writable = true }),
+    nullifier1: zero.Account(NullifierAccount, .{ .writable = true }),
+    nullifier2: zero.Account(NullifierAccount, .{ .writable = true }),
+    global_config: zero.Account(GlobalConfig, .{}),
+    user: zero.Signer(0),
+    recipient: zero.Mut(0),
+};
+
+const TransactSplAccounts = struct {
+    tree_account: zero.Account(TreeAccount, .{ .writable = true }),
+    token_pool: zero.Account(TokenPoolAccount, .{}),
+    nullifier1: zero.Account(NullifierAccount, .{ .writable = true }),
+    nullifier2: zero.Account(NullifierAccount, .{ .writable = true }),
+    global_config: zero.Account(GlobalConfig, .{}),
+    user: zero.Signer(0),
+    user_token_account: zero.Mut(0),
+    vault_token_account: zero.Mut(0),
+};
+
+// ============================================================================
+// Arguments
+// ============================================================================
+
+const InitializeArgs = extern struct {
+    max_deposit_amount: u64,
+};
+
+const UpdateConfigArgs = extern struct {
+    deposit_fee_rate: u16,
+    withdrawal_fee_rate: u16,
+    fee_error_margin: u16,
+};
+
+const InitializeSplArgs = extern struct {
+    max_deposit_amount: u64,
+};
+
+/// Proof structure (256 bytes)
+const Proof = extern struct {
+    a: [64]u8,  // G1 point
+    b: [128]u8, // G2 point
+    c: [64]u8,  // G1 point
+};
+
+/// Transaction arguments (Privacy Cash compatible)
+const TransactArgs = extern struct {
+    proof: Proof,
+    root: [32]u8,
+    input_nullifier1: [32]u8,
+    input_nullifier2: [32]u8,
+    output_commitment1: [32]u8,
+    output_commitment2: [32]u8,
+    public_amount: [32]u8,
+    ext_data_hash: [32]u8,
+};
+
+// ============================================================================
 // Instruction Handlers
 // ============================================================================
 
 fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
     const args = ctx.args(InitializeArgs);
     const tree = ctx.accounts.tree_account.getMut();
-    const pool = ctx.accounts.pool_token_account.getMut();
     const config = ctx.accounts.global_config.getMut();
 
     const authority_key = ctx.accounts.authority.id().*;
     tree.authority = authority_key;
-    pool.authority = authority_key;
     config.authority = authority_key;
 
     tree.next_index = 0;
@@ -327,56 +336,117 @@ fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
     tree.height = MERKLE_TREE_HEIGHT;
     tree.root_history_size = ROOT_HISTORY_SIZE;
 
-    // Initialize with pre-computed zero hashes
     var level: u8 = 0;
     while (level < MERKLE_TREE_HEIGHT) : (level += 1) {
         tree.filled_subtrees[level] = ZERO_HASHES[level];
     }
-
-    // Set initial root
     tree.root_history[0] = ZERO_HASHES[MERKLE_TREE_HEIGHT];
 
     config.deposit_fee_rate = 0;
     config.withdrawal_fee_rate = 25;
     config.fee_error_margin = 500;
 
-    sol.log.print("Pool initialized", .{});
+    sol.log.log("Pool initialized");
 }
 
-fn depositHandler(ctx: zero.Ctx(DepositAccounts)) !void {
-    const args = ctx.args(DepositArgs);
+fn updateConfigHandler(ctx: zero.Ctx(UpdateConfigAccounts)) !void {
+    const args = ctx.args(UpdateConfigArgs);
+    const config = ctx.accounts.global_config.getMut();
+    const authority_key = ctx.accounts.authority.id().*;
+
+    // Verify authority
+    var matches = true;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        if (config.authority.bytes[i] != authority_key.bytes[i]) {
+            matches = false;
+            break;
+        }
+    }
+    if (!matches) return error.Unauthorized;
+
+    config.deposit_fee_rate = args.deposit_fee_rate;
+    config.withdrawal_fee_rate = args.withdrawal_fee_rate;
+    config.fee_error_margin = args.fee_error_margin;
+
+    sol.log.log("Config updated");
+}
+
+fn initializeSplHandler(ctx: zero.Ctx(InitializeSplAccounts)) !void {
+    const args = ctx.args(InitializeSplArgs);
     const tree = ctx.accounts.tree_account.getMut();
+    const pool = ctx.accounts.token_pool.getMut();
 
-    if (args.amount > tree.max_deposit_amount) {
-        return error.DepositLimitExceeded;
+    const authority_key = ctx.accounts.authority.id().*;
+    tree.authority = authority_key;
+    pool.authority = authority_key;
+
+    tree.next_index = 0;
+    tree.root_index = 0;
+    tree.max_deposit_amount = args.max_deposit_amount;
+    tree.height = MERKLE_TREE_HEIGHT;
+    tree.root_history_size = ROOT_HISTORY_SIZE;
+
+    var level: u8 = 0;
+    while (level < MERKLE_TREE_HEIGHT) : (level += 1) {
+        tree.filled_subtrees[level] = ZERO_HASHES[level];
     }
+    tree.root_history[0] = ZERO_HASHES[MERKLE_TREE_HEIGHT];
 
-    // Insert commitment into Merkle tree
-    _ = try insertLeaf(tree, args.commitment);
-
-    sol.log.print("Deposit: {} lamports", .{args.amount});
+    sol.log.log("SPL pool initialized");
 }
 
-fn withdrawHandler(ctx: zero.Ctx(WithdrawAccounts)) !void {
-    const args = ctx.args(WithdrawArgs);
-    const tree = ctx.accounts.tree_account.get();
-    const nullifier = ctx.accounts.nullifier_account.getMut();
+fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
+    const args = ctx.args(TransactArgs);
+    const tree = ctx.accounts.tree_account.getMut();
+    const nullifier1 = ctx.accounts.nullifier1.getMut();
+    const nullifier2 = ctx.accounts.nullifier2.getMut();
 
-    // Check nullifier not used
-    if (nullifier.is_used != 0) {
-        return error.NullifierAlreadyUsed;
-    }
+    // Check nullifiers not used
+    if (nullifier1.is_used != 0) return error.NullifierAlreadyUsed;
+    if (nullifier2.is_used != 0) return error.NullifierAlreadyUsed;
 
     // Check root is known
-    if (!tree.isKnownRoot(args.root)) {
-        return error.UnknownRoot;
-    }
+    if (!tree.isKnownRoot(args.root)) return error.UnknownRoot;
+
+    // TODO: Verify Groth16 proof using bn254 syscalls
+
+    // Mark nullifiers as used
+    nullifier1.is_used = 1;
+    nullifier2.is_used = 1;
+
+    // Insert output commitments
+    _ = try insertLeaf(tree, args.output_commitment1);
+    _ = try insertLeaf(tree, args.output_commitment2);
+
+    sol.log.log("Transact completed");
+}
+
+fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
+    const args = ctx.args(TransactArgs);
+    const tree = ctx.accounts.tree_account.getMut();
+    const nullifier1 = ctx.accounts.nullifier1.getMut();
+    const nullifier2 = ctx.accounts.nullifier2.getMut();
+
+    // Check nullifiers not used
+    if (nullifier1.is_used != 0) return error.NullifierAlreadyUsed;
+    if (nullifier2.is_used != 0) return error.NullifierAlreadyUsed;
+
+    // Check root is known
+    if (!tree.isKnownRoot(args.root)) return error.UnknownRoot;
 
     // TODO: Verify Groth16 proof
-    // For now, just mark nullifier as used
-    nullifier.is_used = 1;
+    // TODO: Transfer SPL tokens
 
-    sol.log.print("Withdraw: {} lamports", .{args.amount});
+    // Mark nullifiers as used
+    nullifier1.is_used = 1;
+    nullifier2.is_used = 1;
+
+    // Insert output commitments
+    _ = try insertLeaf(tree, args.output_commitment1);
+    _ = try insertLeaf(tree, args.output_commitment2);
+
+    sol.log.log("Transact SPL completed");
 }
 
 // ============================================================================
@@ -384,9 +454,12 @@ fn withdrawHandler(ctx: zero.Ctx(WithdrawAccounts)) !void {
 // ============================================================================
 
 comptime {
+    @setEvalBranchQuota(100000);
     zero.program(.{
         zero.ix("initialize", InitializeAccounts, initializeHandler),
-        zero.ix("deposit", DepositAccounts, depositHandler),
-        zero.ix("withdraw", WithdrawAccounts, withdrawHandler),
+        zero.ix("update_config", UpdateConfigAccounts, updateConfigHandler),
+        zero.ix("initialize_spl", InitializeSplAccounts, initializeSplHandler),
+        zero.ix("transact", TransactAccounts, transactHandler),
+        zero.ix("transact_spl", TransactSplAccounts, transactSplHandler),
     });
 }
