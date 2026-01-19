@@ -45,4 +45,25 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // Examples
+    const examples_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/use_cases.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "privacy_zig", .module = privacy_mod },
+            },
+        }),
+    });
+
+    const run_examples_test = b.addRunArtifact(examples_test);
+    const examples_step = b.step("examples", "Run example tests");
+    examples_step.dependOn(&run_examples_test.step);
+
+    // Run all tests including examples
+    const all_test_step = b.step("test-all", "Run all tests including examples");
+    all_test_step.dependOn(&run_tests.step);
+    all_test_step.dependOn(&run_examples_test.step);
 }
