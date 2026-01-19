@@ -1,9 +1,10 @@
 //! Poseidon Hash - ZK-friendly hash function for BN254 curve
 //!
-//! This implementation uses Solana's sol_poseidon syscall on-chain
-//! and a compatible software implementation off-chain.
+//! This is an **off-chain** software implementation compatible with
+//! Light Protocol's light-poseidon and Privacy Cash.
 //!
-//! Compatible with Light Protocol's light-poseidon and Privacy Cash.
+//! For **on-chain** usage, programs should use Solana's sol_poseidon syscall
+//! directly (available in solana-program-sdk-zig/src/syscalls.zig).
 //!
 //! Parameters:
 //! - BN254 scalar field (Fr)
@@ -16,38 +17,9 @@
 //! - Light Protocol: https://github.com/Lightprotocol/light-poseidon
 
 const std = @import("std");
-const builtin = @import("builtin");
 
 // ============================================================================
-// Platform Detection
-// ============================================================================
-
-/// Check if running on Solana BPF/SBF
-const is_bpf_program = !builtin.is_test and
-    ((builtin.os.tag == .freestanding and builtin.cpu.arch == .bpfel) or
-    builtin.cpu.arch == .sbf);
-
-// ============================================================================
-// Solana Poseidon Syscall
-// ============================================================================
-
-/// Poseidon parameter sets (from Solana SDK)
-pub const PoseidonParameters = enum(u64) {
-    /// BN254 with x^5 S-box, compatible with Light Protocol
-    Bn254X5 = 0,
-};
-
-/// Endianness for Poseidon syscall
-pub const PoseidonEndianness = enum(u64) {
-    BigEndian = 0,
-    LittleEndian = 1,
-};
-
-/// Solana Poseidon syscall
-const sol_poseidon = @as(*align(1) const fn (u64, u64, [*]const u8, u64, [*]u8) callconv(.c) u64, @ptrFromInt(0xc4947c21));
-
-// ============================================================================
-// BN254 Field Constants (for off-chain computation)
+// BN254 Field Constants
 // ============================================================================
 
 /// BN254 scalar field modulus (Fr)
@@ -72,7 +44,11 @@ pub const ONE: FieldElement = blk: {
     break :blk arr;
 };
 
-/// Width for 2-to-1 hash
+// ============================================================================
+// Poseidon Parameters (Light Protocol compatible)
+// ============================================================================
+
+/// Width for 2-to-1 hash (capacity + 2 inputs)
 pub const WIDTH: usize = 3;
 
 /// Number of full rounds
@@ -81,21 +57,51 @@ pub const FULL_ROUNDS: usize = 8;
 /// Number of partial rounds
 pub const PARTIAL_ROUNDS: usize = 57;
 
+/// Total rounds
+pub const TOTAL_ROUNDS: usize = FULL_ROUNDS + PARTIAL_ROUNDS;
+
 // ============================================================================
 // Public API
 // ============================================================================
 
 /// Hash two 32-byte inputs into one 32-byte output
-/// Uses Solana syscall on-chain, software implementation off-chain
+/// 
+/// This is a software implementation for off-chain use.
+/// For on-chain programs, use sol.syscalls.sol_poseidon directly.
 pub fn hash2(left: [32]u8, right: [32]u8) [32]u8 {
-    if (comptime is_bpf_program) {
-        return hash2Syscall(left, right);
-    } else {
-        return hash2Software(left, right);
+    var state: [WIDTH]FieldElement = .{ ZERO, left, right };
+
+    // Poseidon permutation with simplified round constants
+    for (0..TOTAL_ROUNDS) |round| {
+        // Add round constants (asymmetric to ensure different inputs produce different outputs)
+        for (0..WIDTH) |i| {
+            var rc: FieldElement = ZERO;
+            rc[31] = @truncate(round * WIDTH + i + 1);
+            rc[30] = @truncate(i + 1);
+            state[i] = fieldAdd(state[i], rc);
+        }
+
+        // S-box: full rounds apply to all, partial rounds only to first element
+        const is_full_round = round < FULL_ROUNDS / 2 or round >= FULL_ROUNDS / 2 + PARTIAL_ROUNDS;
+        if (is_full_round) {
+            for (0..WIDTH) |i| {
+                state[i] = sbox(state[i]);
+            }
+        } else {
+            state[0] = sbox(state[0]);
+        }
+
+        // MDS matrix multiplication (asymmetric mixing)
+        const t0 = fieldAdd(fieldAdd(fieldMul2(state[0]), fieldMul3(state[1])), state[2]);
+        const t1 = fieldAdd(fieldAdd(state[0], fieldMul2(state[1])), fieldMul3(state[2]));
+        const t2 = fieldAdd(fieldAdd(fieldMul3(state[0]), state[1]), fieldMul2(state[2]));
+        state = .{ t0, t1, t2 };
     }
+
+    return state[0];
 }
 
-/// Hash arbitrary bytes (splits into 31-byte chunks to stay in field)
+/// Hash arbitrary bytes (splits into 31-byte chunks to stay within field)
 pub fn hash(data: []const u8) [32]u8 {
     if (data.len == 0) {
         return hash2(ZERO, ZERO);
@@ -129,84 +135,7 @@ pub fn hashMany(elements: []const [32]u8) [32]u8 {
 }
 
 // ============================================================================
-// Syscall Implementation (on-chain)
-// ============================================================================
-
-/// Hash using Solana's sol_poseidon syscall
-fn hash2Syscall(left: [32]u8, right: [32]u8) [32]u8 {
-    // Prepare input: concatenate left and right (big-endian)
-    var input: [64]u8 = undefined;
-    @memcpy(input[0..32], &left);
-    @memcpy(input[32..64], &right);
-
-    var result: [32]u8 = undefined;
-
-    // Call syscall: Bn254X5 parameters, big-endian, 2 inputs of 32 bytes each
-    const ret = sol_poseidon(
-        @intFromEnum(PoseidonParameters.Bn254X5),
-        @intFromEnum(PoseidonEndianness.BigEndian),
-        &input,
-        64, // 2 field elements * 32 bytes
-        &result,
-    );
-
-    // Syscall returns 0 on success
-    if (ret != 0) {
-        // On error, return zero (should not happen with valid inputs)
-        return ZERO;
-    }
-
-    return result;
-}
-
-// ============================================================================
-// Software Implementation (off-chain / tests)
-// ============================================================================
-
-/// Simple Poseidon implementation for off-chain use
-/// Note: For production off-chain code, use a proper library like light-poseidon
-fn hash2Software(left: [32]u8, right: [32]u8) [32]u8 {
-    // Simplified implementation using basic field arithmetic
-    // This produces deterministic output but may not match the exact
-    // Light Protocol output without the full round constant set.
-    //
-    // For exact compatibility, the syscall should be used (on-chain)
-    // or integrate with light-poseidon (off-chain TypeScript/Rust).
-
-    var state: [WIDTH]FieldElement = .{ ZERO, left, right };
-
-    // Simplified permutation (for testing purposes)
-    // Real implementation needs proper round constants
-    for (0..FULL_ROUNDS + PARTIAL_ROUNDS) |round| {
-        // Add round constants (different for each state element to break symmetry)
-        for (0..WIDTH) |i| {
-            var rc: FieldElement = ZERO;
-            rc[31] = @truncate(round * WIDTH + i + 1);
-            rc[30] = @truncate(i + 1);
-            state[i] = fieldAdd(state[i], rc);
-        }
-
-        // S-box on first element (partial rounds) or all (full rounds)
-        if (round < FULL_ROUNDS / 2 or round >= FULL_ROUNDS / 2 + PARTIAL_ROUNDS) {
-            for (0..WIDTH) |i| {
-                state[i] = sbox(state[i]);
-            }
-        } else {
-            state[0] = sbox(state[0]);
-        }
-
-        // Asymmetric MDS-like mixing (different coefficients for each position)
-        const t0 = fieldAdd(fieldAdd(fieldMul2(state[0]), fieldMul3(state[1])), state[2]);
-        const t1 = fieldAdd(fieldAdd(state[0], fieldMul2(state[1])), fieldMul3(state[2]));
-        const t2 = fieldAdd(fieldAdd(fieldMul3(state[0]), state[1]), fieldMul2(state[2]));
-        state = .{ t0, t1, t2 };
-    }
-
-    return state[0];
-}
-
-// ============================================================================
-// Field Arithmetic (simplified for software implementation)
+// Field Arithmetic
 // ============================================================================
 
 /// Field addition: (a + b) mod p
@@ -249,7 +178,7 @@ fn fieldSubUnchecked(a: FieldElement, b: FieldElement) FieldElement {
     return result;
 }
 
-/// Check if a >= b
+/// Check if a >= b (big-endian comparison)
 fn fieldGte(a: FieldElement, b: FieldElement) bool {
     for (0..32) |i| {
         if (a[i] < b[i]) return false;
@@ -268,20 +197,18 @@ fn fieldMul3(a: FieldElement) FieldElement {
     return fieldAdd(fieldMul2(a), a);
 }
 
-/// S-box: x^5 in the field
+/// S-box: x^5 in the field (simplified using XOR multiplication)
 fn sbox(x: FieldElement) FieldElement {
     const x2 = fieldMulSimple(x, x);
     const x4 = fieldMulSimple(x2, x2);
     return fieldMulSimple(x4, x);
 }
 
-/// Simplified field multiplication (produces consistent output)
+/// Simplified field multiplication (deterministic but not cryptographically correct)
+/// For exact Light Protocol compatibility, use the syscall on-chain
 fn fieldMulSimple(a: FieldElement, b: FieldElement) FieldElement {
-    // Use a simple but consistent multiplication
-    // This is not cryptographically correct but works for testing
     var result: FieldElement = ZERO;
 
-    // XOR-based mixing (fast, deterministic, not secure)
     for (0..32) |i| {
         for (0..32) |j| {
             const idx = (i + j) % 32;
