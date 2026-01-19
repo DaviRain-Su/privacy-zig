@@ -17,7 +17,8 @@ This SDK is designed to be **compatible with [Privacy Cash](https://github.com/P
 | Metric | Privacy Cash (Rust) | privacy-zig |
 |--------|---------------------|-------------|
 | On-chain CU overhead | ~150 CU (Anchor) | ~5-18 CU (anchor-zig) |
-| Binary size | ~100 KB | ~5-10 KB |
+| Binary size | ~100+ KB | **57 KB** |
+| Groth16 verification | ✓ | ✓ (alt_bn128 syscall) |
 | Verification speed | Good | **Better** |
 
 ## Features
@@ -210,8 +211,18 @@ Built with Zig for maximum efficiency:
 ## Testing
 
 ```bash
+# SDK tests
 zig build test --summary all
 # 46/46 tests passed ✓
+
+# On-chain program tests
+cd programs/privacy-pool
+./solana-zig/zig build test --summary all
+# 8/8 tests passed ✓
+
+# Build program (57 KB)
+./solana-zig/zig build
+ls -lh zig-out/lib/privacy_pool.so
 ```
 
 ## Roadmap
@@ -221,11 +232,14 @@ zig build test --summary all
 - [x] Merkle tree with proofs
 - [x] Nullifier management
 - [x] Privacy pool deposit/withdraw logic
-- [x] On-chain program skeleton (programs/privacy-pool)
-- [ ] Groth16 verification via alt_bn128 syscall
-- [ ] Full Privacy Cash compatibility
+- [x] On-chain program with 4 instructions (initialize, deposit, withdraw, transact)
+- [x] Groth16 verification via alt_bn128 syscall
+- [x] Typed account access with get()/getMut()
+- [ ] Poseidon hash matching Light Protocol parameters
+- [ ] Full Privacy Cash compatibility (actual VK from trusted setup)
 - [ ] Frontend SDK (TypeScript)
 - [ ] Relayer support
+- [ ] SPL Token support (USDC, USDT)
 
 ## Privacy Cash Compatibility
 
