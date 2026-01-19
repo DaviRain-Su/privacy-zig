@@ -19,10 +19,14 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 // Conditional imports for BPF vs native
-// Check for BPF target (Solana uses bpfel architecture)
-const is_bpf = builtin.cpu.arch == .bpfel or builtin.cpu.arch == .bpfeb;
+// Matching solana-program-sdk-zig/src/bpf.zig
+pub const is_bpf_program = !builtin.is_test and
+    ((builtin.os.tag == .freestanding and
+    builtin.cpu.arch == .bpfel and
+    std.Target.bpf.featureSetHas(builtin.cpu.features, .solana)) or
+    builtin.cpu.arch == .sbf);
 
-const sol = if (is_bpf) @import("solana_program_sdk") else struct {
+const sol = if (is_bpf_program) @import("solana_program_sdk") else struct {
     pub const PublicKey = extern struct {
         bytes: [32]u8,
 
@@ -58,7 +62,7 @@ const sol = if (is_bpf) @import("solana_program_sdk") else struct {
     };
 };
 
-const anchor = if (is_bpf) @import("sol_anchor_zig") else struct {
+const anchor = if (is_bpf_program) @import("sol_anchor_zig") else struct {
     pub const zero_cu = struct {
         pub fn Signer(comptime _: usize) type {
             return struct {};
@@ -438,7 +442,7 @@ pub fn verifyGroth16(
 
     _ = proof_b;
 
-    if (is_bpf) {
+    if (is_bpf_program) {
         // BPF: Use alt_bn128 syscalls for real verification
         // Real implementation would call:
         // sol.syscalls.sol_alt_bn128_group_op(...)
@@ -584,7 +588,7 @@ pub fn transact(ctx: zero.Ctx(TransactAccounts), args: TransactArgs) !void {
 // ============================================================================
 
 comptime {
-    if (is_bpf) {
+    if (is_bpf_program) {
         zero.program(.{
             zero.ix("initialize", InitializeAccounts, initialize),
             zero.ix("deposit", DepositAccounts, deposit),
