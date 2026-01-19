@@ -292,6 +292,8 @@ const TransactSplAccounts = struct {
     vault_token_account: zero.Mut(0),
     /// User (signer for deposits)
     user: zero.Signer(0),
+    /// Vault authority PDA (for withdrawals)
+    vault_authority: zero.Readonly(0),
 };
 
 // ============================================================================
@@ -471,7 +473,7 @@ fn verifyGroth16Proof(
 }
 
 // ============================================================================
-// SOL Transfer Helpers (Direct lamport manipulation)
+// Transfer Helpers
 // ============================================================================
 
 /// Transfer SOL by directly manipulating lamports
@@ -484,6 +486,74 @@ fn transferLamports(
     if (from_lamports.* < amount) return error.InsufficientFunds;
     from_lamports.* -= amount;
     to_lamports.* += amount;
+}
+
+const AccountParam = sol.account.Account.Param;
+const Instruction = sol.instruction.Instruction;
+const AccountInfo = sol.account.Account.Info;
+
+/// Transfer SPL Tokens using Token Program CPI
+fn transferTokensCpi(
+    source: AccountInfo,
+    destination: AccountInfo,
+    authority: AccountInfo,
+    amount: u64,
+) !void {
+    // SPL Token Transfer instruction (index = 3)
+    var data: [9]u8 = undefined;
+    data[0] = 3; // Transfer instruction
+    std.mem.writeInt(u64, data[1..9], amount, .little);
+
+    const account_params = [_]AccountParam{
+        .{ .id = source.id, .is_writable = true, .is_signer = false },
+        .{ .id = destination.id, .is_writable = true, .is_signer = false },
+        .{ .id = authority.id, .is_writable = false, .is_signer = true },
+    };
+
+    const ix = Instruction.from(.{
+        .program_id = &TOKEN_PROGRAM_ID,
+        .accounts = &account_params,
+        .data = &data,
+    });
+
+    const account_infos = [_]AccountInfo{ source, destination, authority };
+
+    if (ix.invoke(&account_infos)) |_| {
+        return error.TokenTransferFailed;
+    }
+}
+
+/// Transfer SPL Tokens from PDA using Token Program CPI with signer seeds
+fn transferTokensFromPdaCpi(
+    source: AccountInfo,
+    destination: AccountInfo,
+    authority_pda: AccountInfo,
+    amount: u64,
+    seeds: []const []const u8,
+) !void {
+    var data: [9]u8 = undefined;
+    data[0] = 3; // Transfer instruction
+    std.mem.writeInt(u64, data[1..9], amount, .little);
+
+    const account_params = [_]AccountParam{
+        .{ .id = source.id, .is_writable = true, .is_signer = false },
+        .{ .id = destination.id, .is_writable = true, .is_signer = false },
+        .{ .id = authority_pda.id, .is_writable = false, .is_signer = true },
+    };
+
+    const ix = Instruction.from(.{
+        .program_id = &TOKEN_PROGRAM_ID,
+        .accounts = &account_params,
+        .data = &data,
+    });
+
+    const account_infos = [_]AccountInfo{ source, destination, authority_pda };
+
+    var signer_seeds: [1][]const []const u8 = .{seeds};
+
+    if (ix.invokeSigned(&account_infos, &signer_seeds)) |_| {
+        return error.TokenTransferFailed;
+    }
 }
 
 // ============================================================================
@@ -661,14 +731,36 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
 
     sol.log.log("Proof verified");
 
-    // Log SPL Token transfer amount
-    // Note: Actual SPL Token transfers require CPI to Token Program
-    // This is handled by the client by including a Token transfer instruction
-    // in the same transaction after calling transact_spl
+    // Handle SPL Token transfer via CPI
     if (args.public_amount > 0) {
-        sol.log.log("Token deposit recorded");
+        // Deposit: user_token_account -> vault_token_account
+        const deposit_amount: u64 = @intCast(args.public_amount);
+        try transferTokensCpi(
+            ctx.accounts.user_token_account.info(),
+            ctx.accounts.vault_token_account.info(),
+            ctx.accounts.user.info(),
+            deposit_amount,
+        );
+        sol.log.log("Token deposit completed");
     } else if (args.public_amount < 0) {
-        sol.log.log("Token withdrawal recorded");
+        // Withdrawal: vault_token_account -> user_token_account
+        const withdraw_amount: u64 = @intCast(-args.public_amount);
+        
+        // PDA seeds for vault authority: ["vault_authority", tree_account_key]
+        const tree_key = ctx.accounts.tree_account.id();
+        const seeds: [2][]const u8 = .{
+            "vault_authority",
+            &tree_key.bytes,
+        };
+        
+        try transferTokensFromPdaCpi(
+            ctx.accounts.vault_token_account.info(),
+            ctx.accounts.user_token_account.info(),
+            ctx.accounts.vault_authority.info(),
+            withdraw_amount,
+            &seeds,
+        );
+        sol.log.log("Token withdrawal completed");
     }
 
     // Mark nullifiers as used
