@@ -46,14 +46,20 @@ pub const PROOF_SIZE: usize = 256;
 /// Default max deposit (1000 SOL)
 pub const DEFAULT_MAX_DEPOSIT: u64 = 1_000_000_000_000;
 
-/// SOL address (native mint)
-pub const SOL_MINT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("So11111111111111111111111111111111111111112");
+/// Native SOL mint (wrapped SOL)
+pub const NATIVE_MINT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("So11111111111111111111111111111111111111112");
 
-/// USDC mint address (mainnet)
-pub const USDC_MINT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
-
-/// USDT mint address (mainnet)  
-pub const USDT_MINT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
+/// Well-known mints (for reference, not restrictions)
+pub const WellKnownMints = struct {
+    /// USDC (mainnet)
+    pub const USDC: sol.PublicKey = sol.PublicKey.comptimeFromBase58("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+    /// USDT (mainnet)
+    pub const USDT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
+    /// BONK (mainnet)
+    pub const BONK: sol.PublicKey = sol.PublicKey.comptimeFromBase58("DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263");
+    /// JUP (mainnet)
+    pub const JUP: sol.PublicKey = sol.PublicKey.comptimeFromBase58("JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN");
+};
 
 /// Fee basis points denominator
 pub const FEE_DENOMINATOR: u64 = 10000;
@@ -131,17 +137,22 @@ pub const NullifierAccount = extern struct {
     nullifier: [32]u8,
 };
 
-/// Pool vault account (holds SPL tokens)
-/// This is a PDA-owned token account
+/// Pool vault metadata (stores info about PDA-owned token account)
+/// The actual tokens are held in a separate SPL Token account
+/// owned by a PDA derived from [VAULT_SEED, mint, tree_account]
 pub const PoolVault = extern struct {
-    /// The mint this vault holds
+    /// The mint this vault accepts
     mint: sol.PublicKey,
-    /// Pool authority PDA
+    /// The tree account this vault is associated with
+    tree_account: sol.PublicKey,
+    /// Pool authority PDA (owns the token account)
     authority: sol.PublicKey,
-    /// PDA bump for the vault
-    bump: u8,
+    /// PDA bump for the authority
+    authority_bump: u8,
+    /// Whether this vault is initialized
+    is_initialized: u8,
     /// Padding
-    _padding: [7]u8,
+    _padding: [6]u8,
 };
 
 // ============================================================================
@@ -806,7 +817,7 @@ pub const PrivacyPoolError = error{
 // ============================================================================
 
 /// Initialize a new privacy pool
-fn initializeHandler(ctx: *const zero.Ctx(InitializeAccounts)) !void {
+noinline fn initializeHandler(ctx: *const zero.Ctx(InitializeAccounts)) !void {
     const args = ctx.args(InitializeArgs);
     const accounts = ctx.accounts();
 
@@ -849,7 +860,7 @@ fn initializeHandler(ctx: *const zero.Ctx(InitializeAccounts)) !void {
 }
 
 /// Deposit funds into the privacy pool
-fn depositHandler(ctx: *const zero.Ctx(DepositAccounts)) !void {
+noinline fn depositHandler(ctx: *const zero.Ctx(DepositAccounts)) !void {
     const args = ctx.args(DepositArgs);
     const accounts = ctx.accounts();
 
@@ -886,7 +897,7 @@ fn depositHandler(ctx: *const zero.Ctx(DepositAccounts)) !void {
 }
 
 /// Withdraw funds from the privacy pool
-fn withdrawHandler(ctx: *const zero.Ctx(WithdrawAccounts)) !void {
+noinline fn withdrawHandler(ctx: *const zero.Ctx(WithdrawAccounts)) !void {
     const args = ctx.args(WithdrawArgs);
     const accounts = ctx.accounts();
 
@@ -965,7 +976,7 @@ fn withdrawHandler(ctx: *const zero.Ctx(WithdrawAccounts)) !void {
 }
 
 /// Combined deposit/withdraw transaction (Privacy Cash compatible)
-fn transactHandler(ctx: *const zero.Ctx(TransactAccounts)) !void {
+noinline fn transactHandler(ctx: *const zero.Ctx(TransactAccounts)) !void {
     const args = ctx.args(TransactArgs);
     const accounts = ctx.accounts();
 
@@ -1079,7 +1090,7 @@ fn transactHandler(ctx: *const zero.Ctx(TransactAccounts)) !void {
 // ============================================================================
 
 /// Initialize SPL Token pool
-fn initializeTokenPoolHandler(ctx: *const zero.Ctx(InitializeTokenPoolAccounts)) !void {
+noinline fn initializeTokenPoolHandler(ctx: *const zero.Ctx(InitializeTokenPoolAccounts)) !void {
     const args = ctx.args(InitializeTokenPoolArgs);
     const accounts = ctx.accounts();
 
@@ -1119,7 +1130,7 @@ fn initializeTokenPoolHandler(ctx: *const zero.Ctx(InitializeTokenPoolAccounts))
 }
 
 /// Deposit SPL tokens into the privacy pool
-fn depositTokenHandler(ctx: *const zero.Ctx(DepositTokenAccounts)) !void {
+noinline fn depositTokenHandler(ctx: *const zero.Ctx(DepositTokenAccounts)) !void {
     const args = ctx.args(DepositTokenArgs);
     const accounts = ctx.accounts();
 
@@ -1179,7 +1190,7 @@ noinline fn verifyTokenWithdrawalProof(
 }
 
 /// Withdraw SPL tokens from the privacy pool
-fn withdrawTokenHandler(ctx: *const zero.Ctx(WithdrawTokenAccounts)) !void {
+noinline fn withdrawTokenHandler(ctx: *const zero.Ctx(WithdrawTokenAccounts)) !void {
     const args = ctx.args(WithdrawTokenArgs);
     const accounts = ctx.accounts();
 
@@ -1274,10 +1285,10 @@ comptime {
         zero.ix("deposit", DepositAccounts, depositHandler),
         zero.ix("withdraw", WithdrawAccounts, withdrawHandler),
         zero.ix("transact", TransactAccounts, transactHandler),
-        // SPL Token instructions (disabled due to stack limits - need optimization)
-        // zero.ix("initialize_token_pool", InitializeTokenPoolAccounts, initializeTokenPoolHandler),
-        // zero.ix("deposit_token", DepositTokenAccounts, depositTokenHandler),
-        // zero.ix("withdraw_token", WithdrawTokenAccounts, withdrawTokenHandler),
+        // SPL Token instructions
+        zero.ix("initialize_token_pool", InitializeTokenPoolAccounts, initializeTokenPoolHandler),
+        zero.ix("deposit_token", DepositTokenAccounts, depositTokenHandler),
+        zero.ix("withdraw_token", WithdrawTokenAccounts, withdrawTokenHandler),
     });
 }
 
