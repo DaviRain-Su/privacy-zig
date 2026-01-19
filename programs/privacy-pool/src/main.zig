@@ -180,44 +180,44 @@ pub const TransactArgs = extern struct {
 // ============================================================================
 
 /// Initialize accounts
-/// Using zero.Mut(0) for dynamic account access with ProgramContext
+/// Using typed accounts for proper data access
 const InitializeAccounts = struct {
     authority: zero.Signer(0),
-    tree_account: zero.Mut(0),
-    pool_token_account: zero.Mut(0),
-    global_config: zero.Mut(0),
+    tree_account: zero.Mut(TreeAccount),
+    pool_token_account: zero.Mut(PoolTokenAccount),
+    global_config: zero.Mut(GlobalConfig),
     system_program: zero.Readonly(0),
 };
 
 /// Deposit accounts
 const DepositAccounts = struct {
     depositor: zero.Signer(0),
-    tree_account: zero.Mut(0),
-    pool_token_account: zero.Mut(0),
+    tree_account: zero.Mut(TreeAccount),
+    pool_token_account: zero.Mut(0), // Just needs lamports
     system_program: zero.Readonly(0),
 };
 
 /// Withdraw accounts
 const WithdrawAccounts = struct {
-    tree_account: zero.Mut(0),
-    pool_token_account: zero.Mut(0),
-    nullifier_account: zero.Mut(0),
+    tree_account: zero.Readonly(TreeAccount),
+    pool_token_account: zero.Mut(0), // Just needs lamports
+    nullifier_account: zero.Mut(NullifierAccount),
     recipient: zero.Mut(0),
     fee_recipient: zero.Mut(0),
-    global_config: zero.Readonly(0),
+    global_config: zero.Readonly(GlobalConfig),
     system_program: zero.Readonly(0),
 };
 
 /// Transact accounts (Privacy Cash compatible)
 const TransactAccounts = struct {
     signer: zero.Signer(0),
-    tree_account: zero.Mut(0),
-    pool_token_account: zero.Mut(0),
-    nullifier_account1: zero.Mut(0),
-    nullifier_account2: zero.Mut(0),
+    tree_account: zero.Mut(TreeAccount),
+    pool_token_account: zero.Mut(0), // Just needs lamports
+    nullifier_account1: zero.Mut(NullifierAccount),
+    nullifier_account2: zero.Mut(NullifierAccount),
     recipient: zero.Mut(0),
     fee_recipient: zero.Mut(0),
-    global_config: zero.Readonly(0),
+    global_config: zero.Readonly(GlobalConfig),
     system_program: zero.Readonly(0),
 };
 
@@ -444,14 +444,10 @@ fn initializeHandler(ctx: *const zero.Ctx(InitializeAccounts)) !void {
     const args = ctx.args(InitializeArgs);
     const accounts = ctx.accounts();
 
-    // Get account data slices and cast to typed pointers
-    const tree_data = accounts.tree_account.data();
-    const pool_data = accounts.pool_token_account.data();
-    const config_data = accounts.global_config.data();
-
-    const tree_account: *TreeAccount = @ptrCast(@alignCast(tree_data.ptr));
-    const pool_token: *PoolTokenAccount = @ptrCast(@alignCast(pool_data.ptr));
-    const global_config: *GlobalConfig = @ptrCast(@alignCast(config_data.ptr));
+    // Get typed account access
+    const tree_account = accounts.tree_account.getMut();
+    const pool_token = accounts.pool_token_account.getMut();
+    const global_config = accounts.global_config.getMut();
 
     // Set authority
     const authority_key = accounts.authority.id().*;
@@ -491,9 +487,8 @@ fn depositHandler(ctx: *const zero.Ctx(DepositAccounts)) !void {
     const args = ctx.args(DepositArgs);
     const accounts = ctx.accounts();
 
-    // Get typed account data
-    const tree_data = accounts.tree_account.data();
-    const tree_account: *TreeAccount = @ptrCast(@alignCast(tree_data.ptr));
+    // Get typed account access
+    const tree_account = accounts.tree_account.getMut();
 
     // 1. Validate deposit amount
     if (args.amount > tree_account.max_deposit_amount) {
@@ -529,15 +524,10 @@ fn withdrawHandler(ctx: *const zero.Ctx(WithdrawAccounts)) !void {
     const args = ctx.args(WithdrawArgs);
     const accounts = ctx.accounts();
 
-    // Get typed account data
-    const tree_data = accounts.tree_account.data();
-    const tree_account: *const TreeAccount = @ptrCast(@alignCast(tree_data.ptr));
-
-    const nullifier_data = accounts.nullifier_account.data();
-    const nullifier_account: *NullifierAccount = @ptrCast(@alignCast(nullifier_data.ptr));
-
-    const config_data = accounts.global_config.data();
-    const global_config: *const GlobalConfig = @ptrCast(@alignCast(config_data.ptr));
+    // Get typed account access
+    const tree_account = accounts.tree_account.get();
+    const nullifier_account = accounts.nullifier_account.getMut();
+    const global_config = accounts.global_config.get();
 
     // 1. Verify Merkle root is known
     if (!tree_account.isKnownRoot(args.root)) {
@@ -613,18 +603,11 @@ fn transactHandler(ctx: *const zero.Ctx(TransactAccounts)) !void {
     const args = ctx.args(TransactArgs);
     const accounts = ctx.accounts();
 
-    // Get typed account data
-    const tree_data = accounts.tree_account.data();
-    const tree_account: *TreeAccount = @ptrCast(@alignCast(tree_data.ptr));
-
-    const null1_data = accounts.nullifier_account1.data();
-    const nullifier1: *NullifierAccount = @ptrCast(@alignCast(null1_data.ptr));
-
-    const null2_data = accounts.nullifier_account2.data();
-    const nullifier2: *NullifierAccount = @ptrCast(@alignCast(null2_data.ptr));
-
-    const config_data = accounts.global_config.data();
-    const global_config: *const GlobalConfig = @ptrCast(@alignCast(config_data.ptr));
+    // Get typed account access
+    const tree_account = accounts.tree_account.getMut();
+    const nullifier1 = accounts.nullifier_account1.getMut();
+    const nullifier2 = accounts.nullifier_account2.getMut();
+    const global_config = accounts.global_config.get();
 
     // 1. Verify root is in history
     if (!tree_account.isKnownRoot(args.root)) {

@@ -9,8 +9,8 @@
             .hash = "solana_program_sdk-0.17.1-wGj9ULn8EQAEuGqSZ32Y_DWBmgZwoHGkE4JrotUgqbuy",
         },
         .sol_anchor_zig = .{
-            .url = "https://github.com/DaviRain-Su/anchor-zig/archive/refs/heads/main.tar.gz",
-            .hash = "1220948c7ee390a9f52af827ea4b9566d5bc8fee74adfdd16b952964fd723a19a1d8",
+            .url = "https://github.com/DaviRain-Su/anchor-zig/archive/acfcc8d226a41ed114f25bf61b4f870727aeca8c.tar.gz",
+            .hash = "sol_anchor_zig-0.1.0-xwtyYaPbBAAxBLtrHk48a1swdXpdONmUJCuYZJFbnDaW",
         },
     },
     .paths = .{
