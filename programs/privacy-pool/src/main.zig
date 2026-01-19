@@ -19,6 +19,7 @@ const std = @import("std");
 const sol = @import("solana_program_sdk");
 const anchor = @import("sol_anchor_zig");
 const zero = anchor.zero_cu;
+const spl = anchor.spl;
 
 // ============================================================================
 // Program ID
@@ -45,11 +46,21 @@ pub const PROOF_SIZE: usize = 256;
 /// Default max deposit (1000 SOL)
 pub const DEFAULT_MAX_DEPOSIT: u64 = 1_000_000_000_000;
 
-/// SOL address (system program)
-pub const SOL_MINT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("11111111111111111111111111111112");
+/// SOL address (native mint)
+pub const SOL_MINT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("So11111111111111111111111111111111111111112");
+
+/// USDC mint address (mainnet)
+pub const USDC_MINT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+
+/// USDT mint address (mainnet)  
+pub const USDT_MINT: sol.PublicKey = sol.PublicKey.comptimeFromBase58("Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB");
 
 /// Fee basis points denominator
 pub const FEE_DENOMINATOR: u64 = 10000;
+
+/// Pool PDA seeds
+pub const POOL_SEED: []const u8 = "pool";
+pub const VAULT_SEED: []const u8 = "vault";
 
 // ============================================================================
 // Account Structures
@@ -120,21 +131,62 @@ pub const NullifierAccount = extern struct {
     nullifier: [32]u8,
 };
 
+/// Pool vault account (holds SPL tokens)
+/// This is a PDA-owned token account
+pub const PoolVault = extern struct {
+    /// The mint this vault holds
+    mint: sol.PublicKey,
+    /// Pool authority PDA
+    authority: sol.PublicKey,
+    /// PDA bump for the vault
+    bump: u8,
+    /// Padding
+    _padding: [7]u8,
+};
+
 // ============================================================================
 // Instruction Arguments
 // ============================================================================
 
-/// Initialize instruction args
+/// Initialize instruction args (for SOL pool)
 pub const InitializeArgs = extern struct {
     max_deposit_amount: u64,
 };
 
-/// Deposit instruction args
+/// Initialize SPL Token pool args
+pub const InitializeTokenPoolArgs = extern struct {
+    max_deposit_amount: u64,
+};
+
+/// Deposit instruction args (SOL)
 pub const DepositArgs = extern struct {
     /// Commitment hash = poseidon(secret, nullifier, amount)
     commitment: [32]u8,
     /// Amount to deposit (in lamports)
     amount: u64,
+};
+
+/// Deposit SPL Token instruction args
+pub const DepositTokenArgs = extern struct {
+    /// Commitment hash = poseidon(secret, nullifier, amount)
+    commitment: [32]u8,
+    /// Amount to deposit (in token's smallest unit)
+    amount: u64,
+};
+
+/// Withdraw SPL Token instruction args
+pub const WithdrawTokenArgs = extern struct {
+    /// Groth16 proof data
+    proof_a: [64]u8,
+    proof_b: [128]u8,
+    proof_c: [64]u8,
+    /// Public inputs
+    root: [32]u8,
+    nullifier_hash: [32]u8,
+    /// Amount to withdraw
+    amount: u64,
+    /// Fee
+    fee: u64,
 };
 
 /// Withdraw instruction args (simplified)
@@ -218,6 +270,63 @@ const TransactAccounts = struct {
     recipient: zero.Mut(0),
     fee_recipient: zero.Mut(0),
     global_config: zero.Readonly(GlobalConfig),
+    system_program: zero.Readonly(0),
+};
+
+// ============================================================================
+// SPL Token Account Contexts
+// ============================================================================
+
+/// Initialize SPL Token pool accounts
+const InitializeTokenPoolAccounts = struct {
+    authority: zero.Signer(0),
+    tree_account: zero.Mut(TreeAccount),
+    pool_vault: zero.Mut(0), // SPL Token account (ATA)
+    mint: zero.Readonly(0), // Token mint
+    global_config: zero.Mut(GlobalConfig),
+    token_program: zero.Readonly(0),
+    system_program: zero.Readonly(0),
+};
+
+/// Deposit SPL Token accounts
+const DepositTokenAccounts = struct {
+    depositor: zero.Signer(0),
+    depositor_token_account: zero.Mut(0), // Depositor's token account
+    tree_account: zero.Mut(TreeAccount),
+    pool_vault: zero.Mut(0), // Pool's token vault
+    mint: zero.Readonly(0),
+    token_program: zero.Readonly(0),
+    system_program: zero.Readonly(0),
+};
+
+/// Withdraw SPL Token accounts
+const WithdrawTokenAccounts = struct {
+    tree_account: zero.Readonly(TreeAccount),
+    pool_vault: zero.Mut(0), // Pool's token vault
+    pool_authority: zero.Readonly(0), // PDA authority for vault
+    recipient_token_account: zero.Mut(0),
+    fee_recipient_token_account: zero.Mut(0),
+    nullifier_account: zero.Mut(NullifierAccount),
+    mint: zero.Readonly(0),
+    global_config: zero.Readonly(GlobalConfig),
+    token_program: zero.Readonly(0),
+    system_program: zero.Readonly(0),
+};
+
+/// Transact SPL Token accounts (Privacy Cash compatible)
+const TransactTokenAccounts = struct {
+    signer: zero.Signer(0),
+    signer_token_account: zero.Mut(0), // For deposits
+    tree_account: zero.Mut(TreeAccount),
+    pool_vault: zero.Mut(0),
+    pool_authority: zero.Readonly(0), // PDA
+    recipient_token_account: zero.Mut(0),
+    fee_recipient_token_account: zero.Mut(0),
+    nullifier_account1: zero.Mut(NullifierAccount),
+    nullifier_account2: zero.Mut(NullifierAccount),
+    mint: zero.Readonly(0),
+    global_config: zero.Readonly(GlobalConfig),
+    token_program: zero.Readonly(0),
     system_program: zero.Readonly(0),
 };
 
@@ -966,16 +1075,209 @@ fn transactHandler(ctx: *const zero.Ctx(TransactAccounts)) !void {
 }
 
 // ============================================================================
+// SPL Token Handlers
+// ============================================================================
+
+/// Initialize SPL Token pool
+fn initializeTokenPoolHandler(ctx: *const zero.Ctx(InitializeTokenPoolAccounts)) !void {
+    const args = ctx.args(InitializeTokenPoolArgs);
+    const accounts = ctx.accounts();
+
+    const tree_account = accounts.tree_account.getMut();
+    const global_config = accounts.global_config.getMut();
+
+    // Set authority
+    const authority_key = accounts.authority.id().*;
+    tree_account.authority = authority_key;
+    global_config.authority = authority_key;
+
+    // Initialize tree account
+    tree_account.next_index = 0;
+    tree_account.root_index = 0;
+    tree_account.max_deposit_amount = args.max_deposit_amount;
+    tree_account.height = MERKLE_TREE_HEIGHT;
+    tree_account.root_history_size = ROOT_HISTORY_SIZE;
+
+    // Initialize Merkle tree with zero hashes
+    for (0..MERKLE_TREE_HEIGHT) |level| {
+        tree_account.filled_subtrees[level] = zeroHash(@truncate(level));
+    }
+
+    // Set initial root (empty tree root)
+    var current = zeroHash(0);
+    for (0..MERKLE_TREE_HEIGHT) |level| {
+        current = poseidonHash2(current, zeroHash(@truncate(level)));
+    }
+    tree_account.root_history[0] = current;
+
+    // Initialize global config with default fees
+    global_config.deposit_fee_rate = 0;
+    global_config.withdrawal_fee_rate = 25;
+    global_config.fee_error_margin = 500;
+
+    sol.log.print("SPL Token pool initialized with max deposit: {}", .{args.max_deposit_amount});
+}
+
+/// Deposit SPL tokens into the privacy pool
+fn depositTokenHandler(ctx: *const zero.Ctx(DepositTokenAccounts)) !void {
+    const args = ctx.args(DepositTokenArgs);
+    const accounts = ctx.accounts();
+
+    const tree_account = accounts.tree_account.getMut();
+
+    // 1. Validate deposit amount
+    if (args.amount > tree_account.max_deposit_amount) {
+        sol.log.print("Deposit {} exceeds limit {}", .{ args.amount, tree_account.max_deposit_amount });
+        return PrivacyPoolError.DepositLimitExceeded;
+    }
+
+    // 2. Transfer tokens from depositor to pool vault via CPI
+    try spl.token.transfer(
+        accounts.depositor_token_account.info(),
+        accounts.pool_vault.info(),
+        accounts.depositor.info(),
+        args.amount,
+    );
+
+    // 3. Insert commitment into Merkle tree
+    const new_root = insertLeaf(tree_account, args.commitment) catch |err| {
+        sol.log.print("Failed to insert leaf: {}", .{@intFromError(err)});
+        return PrivacyPoolError.TreeFull;
+    };
+
+    sol.log.print("Token deposit processed: {} tokens, leaf index: {}", .{ args.amount, tree_account.next_index - 1 });
+    sol.log.print("New root: {x}", .{new_root});
+}
+
+/// Verify token withdrawal proof (split to reduce stack usage)
+noinline fn verifyTokenWithdrawalProof(
+    proof_a: *const [64]u8,
+    proof_b: *const [128]u8,
+    proof_c: *const [64]u8,
+    root: *const [32]u8,
+    nullifier_hash: *const [32]u8,
+    amount: u64,
+    fee: u64,
+) bool {
+    var amount_bytes: [32]u8 = [_]u8{0} ** 32;
+    std.mem.writeInt(u64, amount_bytes[24..32], amount, .big);
+    
+    var fee_bytes: [32]u8 = [_]u8{0} ** 32;
+    std.mem.writeInt(u64, fee_bytes[24..32], fee, .big);
+    
+    const public_inputs = [_][32]u8{
+        root.*,
+        nullifier_hash.*,
+        [_]u8{0} ** 32,
+        [_]u8{0} ** 32,
+        [_]u8{0} ** 32,
+        amount_bytes,
+        fee_bytes,
+    };
+    
+    return verifyGroth16(proof_a.*, proof_b.*, proof_c.*, public_inputs);
+}
+
+/// Withdraw SPL tokens from the privacy pool
+fn withdrawTokenHandler(ctx: *const zero.Ctx(WithdrawTokenAccounts)) !void {
+    const args = ctx.args(WithdrawTokenArgs);
+    const accounts = ctx.accounts();
+
+    const tree_account = accounts.tree_account.get();
+    const nullifier_account = accounts.nullifier_account.getMut();
+    const global_config = accounts.global_config.get();
+
+    // 1. Verify Merkle root is known
+    if (!tree_account.isKnownRoot(args.root)) {
+        sol.log.print("Unknown root", .{});
+        return PrivacyPoolError.UnknownRoot;
+    }
+
+    // 2. Verify nullifier not already used
+    var nullifier_empty = true;
+    for (nullifier_account.nullifier) |b| {
+        if (b != 0) {
+            nullifier_empty = false;
+            break;
+        }
+    }
+
+    if (!nullifier_empty) {
+        sol.log.print("Nullifier already spent", .{});
+        return PrivacyPoolError.NullifierAlreadyUsed;
+    }
+
+    // 3. Calculate and verify fees
+    const expected_fee = calculateFee(args.amount, global_config.withdrawal_fee_rate);
+    const fee_diff = if (args.fee >= expected_fee) args.fee - expected_fee else expected_fee - args.fee;
+    const max_fee_diff = calculateFee(args.amount, global_config.fee_error_margin);
+    if (fee_diff > max_fee_diff) {
+        return PrivacyPoolError.InvalidFee;
+    }
+
+    // 4. Verify Groth16 proof (split function to reduce stack)
+    const proof_valid = verifyTokenWithdrawalProof(
+        &args.proof_a,
+        &args.proof_b,
+        &args.proof_c,
+        &args.root,
+        &args.nullifier_hash,
+        args.amount,
+        args.fee,
+    );
+    
+    if (!proof_valid) {
+        sol.log.print("Invalid proof", .{});
+        return PrivacyPoolError.InvalidProof;
+    }
+
+    // 5. Mark nullifier as spent
+    nullifier_account.nullifier = args.nullifier_hash;
+
+    // 6. Get pool authority PDA bump for signing
+    const pool_authority_bump = tree_account.bump;
+
+    // 7. Transfer tokens from pool to recipient via CPI with PDA signer
+    try spl.token.transferSigned(
+        accounts.pool_vault.info(),
+        accounts.recipient_token_account.info(),
+        accounts.pool_authority.info(),
+        args.amount,
+        &[_][]const u8{ VAULT_SEED, accounts.mint.id().*.asBytes() },
+        pool_authority_bump,
+    );
+
+    // 8. Transfer fee if applicable
+    if (args.fee > 0) {
+        try spl.token.transferSigned(
+            accounts.pool_vault.info(),
+            accounts.fee_recipient_token_account.info(),
+            accounts.pool_authority.info(),
+            args.fee,
+            &[_][]const u8{ VAULT_SEED, accounts.mint.id().*.asBytes() },
+            pool_authority_bump,
+        );
+    }
+
+    sol.log.print("Token withdrawal processed: {} tokens, fee: {}", .{ args.amount, args.fee });
+}
+
+// ============================================================================
 // Program Entry Point
 // ============================================================================
 
 // Program entry point
 comptime {
     zero.program(.{
+        // SOL instructions
         zero.ix("initialize", InitializeAccounts, initializeHandler),
         zero.ix("deposit", DepositAccounts, depositHandler),
         zero.ix("withdraw", WithdrawAccounts, withdrawHandler),
         zero.ix("transact", TransactAccounts, transactHandler),
+        // SPL Token instructions (disabled due to stack limits - need optimization)
+        // zero.ix("initialize_token_pool", InitializeTokenPoolAccounts, initializeTokenPoolHandler),
+        // zero.ix("deposit_token", DepositTokenAccounts, depositTokenHandler),
+        // zero.ix("withdraw_token", WithdrawTokenAccounts, withdrawTokenHandler),
     });
 }
 
