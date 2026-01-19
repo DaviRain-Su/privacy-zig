@@ -318,6 +318,123 @@ const TransactArgs = extern struct {
 };
 
 // ============================================================================
+// BN254 Operations
+// ============================================================================
+
+const BN254_ADD: u64 = 0;
+const BN254_MUL: u64 = 1;
+const BN254_PAIRING: u64 = 2;
+
+/// G1 point addition
+fn g1Add(a: [64]u8, b: [64]u8) ![64]u8 {
+    var input: [128]u8 = undefined;
+    @memcpy(input[0..64], &a);
+    @memcpy(input[64..128], &b);
+
+    var result: [64]u8 = undefined;
+    const ret = syscall_wrappers.altBn128GroupOp(BN254_ADD, &input, 128, &result);
+    if (ret != 0) return error.G1AddFailed;
+    return result;
+}
+
+/// G1 scalar multiplication
+fn g1Mul(point: [64]u8, scalar: [32]u8) ![64]u8 {
+    var input: [96]u8 = undefined;
+    @memcpy(input[0..64], &point);
+    @memcpy(input[64..96], &scalar);
+
+    var result: [64]u8 = undefined;
+    const ret = syscall_wrappers.altBn128GroupOp(BN254_MUL, &input, 96, &result);
+    if (ret != 0) return error.G1MulFailed;
+    return result;
+}
+
+/// Negate G1 point (negate y coordinate in field)
+fn g1Negate(point: [64]u8) [64]u8 {
+    // BN254 field modulus p
+    const P: [32]u8 = .{
+        0x47, 0xFD, 0x7C, 0xD8, 0x16, 0x8C, 0x20, 0x3C,
+        0x8d, 0xca, 0x71, 0x68, 0x91, 0x6a, 0x81, 0x97,
+        0x5d, 0x58, 0x81, 0x81, 0xb6, 0x45, 0x50, 0xb8,
+        0x29, 0xa0, 0x31, 0xe1, 0x72, 0x4e, 0x64, 0x30,
+    };
+
+    var result: [64]u8 = undefined;
+    @memcpy(result[0..32], point[0..32]); // x stays same
+
+    // y' = p - y (negate in field)
+    var borrow: u8 = 0;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        const a = P[i];
+        const b = point[32 + i];
+        const diff = @as(u16, a) -% @as(u16, b) -% @as(u16, borrow);
+        result[32 + i] = @truncate(diff);
+        borrow = if (diff > 0xFF) 1 else 0;
+    }
+
+    return result;
+}
+
+/// Verify Groth16 proof
+/// Returns true if the proof is valid
+fn verifyGroth16Proof(
+    proof: Proof,
+    public_inputs: [NR_PUBLIC_INPUTS][32]u8,
+) !bool {
+    // Step 1: Compute vk_x = IC[0] + sum(IC[i+1] * input[i])
+    var vk_x = VERIFYING_KEY.vk_ic[0];
+
+    var i: usize = 0;
+    while (i < NR_PUBLIC_INPUTS) : (i += 1) {
+        const term = try g1Mul(VERIFYING_KEY.vk_ic[i + 1], public_inputs[i]);
+        vk_x = try g1Add(vk_x, term);
+    }
+
+    // Step 2: Negate proof.A for pairing check
+    const neg_a = g1Negate(proof.a);
+
+    // Step 3: Prepare pairing input
+    // Pairing check: e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) == 1
+    // Input format: [G1, G2, G1, G2, G1, G2, G1, G2] = 4 pairs
+    var pairing_input: [768]u8 = undefined; // 4 * (64 + 128) = 768
+
+    // Pair 1: e(-A, B)
+    @memcpy(pairing_input[0..64], &neg_a);
+    @memcpy(pairing_input[64..192], &proof.b);
+
+    // Pair 2: e(alpha, beta)
+    @memcpy(pairing_input[192..256], &VERIFYING_KEY.vk_alpha_g1);
+    @memcpy(pairing_input[256..384], &VERIFYING_KEY.vk_beta_g2);
+
+    // Pair 3: e(vk_x, gamma)
+    @memcpy(pairing_input[384..448], &vk_x);
+    @memcpy(pairing_input[448..576], &VERIFYING_KEY.vk_gamma_g2);
+
+    // Pair 4: e(C, delta)
+    @memcpy(pairing_input[576..640], &proof.c);
+    @memcpy(pairing_input[640..768], &VERIFYING_KEY.vk_delta_g2);
+
+    // Step 4: Call pairing syscall
+    var pairing_result: [32]u8 = undefined;
+    const ret = syscall_wrappers.altBn128GroupOp(BN254_PAIRING, &pairing_input, 768, &pairing_result);
+    if (ret != 0) return error.PairingFailed;
+
+    // Check if result is 1 (valid proof)
+    // Result should be 0x000...001 for valid pairing
+    var is_one = (pairing_result[31] == 1);
+    var j: usize = 0;
+    while (j < 31) : (j += 1) {
+        if (pairing_result[j] != 0) {
+            is_one = false;
+            break;
+        }
+    }
+
+    return is_one;
+}
+
+// ============================================================================
 // Instruction Handlers
 // ============================================================================
 
@@ -409,7 +526,30 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
     // Check root is known
     if (!tree.isKnownRoot(args.root)) return error.UnknownRoot;
 
-    // TODO: Verify Groth16 proof using bn254 syscalls
+    // Prepare public inputs for Groth16 verification
+    // Privacy Cash circuit public inputs:
+    // [0] root
+    // [1] input_nullifier1
+    // [2] input_nullifier2
+    // [3] output_commitment1
+    // [4] output_commitment2
+    // [5] public_amount
+    // [6] ext_data_hash
+    const public_inputs: [NR_PUBLIC_INPUTS][32]u8 = .{
+        args.root,
+        args.input_nullifier1,
+        args.input_nullifier2,
+        args.output_commitment1,
+        args.output_commitment2,
+        args.public_amount,
+        args.ext_data_hash,
+    };
+
+    // Verify Groth16 proof
+    const is_valid = try verifyGroth16Proof(args.proof, public_inputs);
+    if (!is_valid) return error.InvalidProof;
+
+    sol.log.log("Proof verified");
 
     // Mark nullifiers as used
     nullifier1.is_used = 1;
@@ -435,8 +575,24 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
     // Check root is known
     if (!tree.isKnownRoot(args.root)) return error.UnknownRoot;
 
-    // TODO: Verify Groth16 proof
-    // TODO: Transfer SPL tokens
+    // Prepare public inputs for Groth16 verification
+    const public_inputs: [NR_PUBLIC_INPUTS][32]u8 = .{
+        args.root,
+        args.input_nullifier1,
+        args.input_nullifier2,
+        args.output_commitment1,
+        args.output_commitment2,
+        args.public_amount,
+        args.ext_data_hash,
+    };
+
+    // Verify Groth16 proof
+    const is_valid = try verifyGroth16Proof(args.proof, public_inputs);
+    if (!is_valid) return error.InvalidProof;
+
+    sol.log.log("Proof verified");
+
+    // TODO: Transfer SPL tokens via CPI
 
     // Mark nullifiers as used
     nullifier1.is_used = 1;
