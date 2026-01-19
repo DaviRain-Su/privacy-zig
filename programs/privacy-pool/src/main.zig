@@ -180,44 +180,45 @@ pub const TransactArgs = extern struct {
 // ============================================================================
 
 /// Initialize accounts
+/// Using zero.Mut(0) for dynamic account access with ProgramContext
 const InitializeAccounts = struct {
     authority: zero.Signer(0),
-    tree_account: zero.Mut(TreeAccount),
-    pool_token_account: zero.Mut(PoolTokenAccount),
-    global_config: zero.Mut(GlobalConfig),
-    system_program: zero.Program(sol.system_program.id),
+    tree_account: zero.Mut(0),
+    pool_token_account: zero.Mut(0),
+    global_config: zero.Mut(0),
+    system_program: zero.Readonly(0),
 };
 
 /// Deposit accounts
 const DepositAccounts = struct {
     depositor: zero.Signer(0),
-    tree_account: zero.Mut(TreeAccount),
-    pool_token_account: zero.Mut(PoolTokenAccount),
-    system_program: zero.Program(sol.system_program.id),
+    tree_account: zero.Mut(0),
+    pool_token_account: zero.Mut(0),
+    system_program: zero.Readonly(0),
 };
 
 /// Withdraw accounts
 const WithdrawAccounts = struct {
-    tree_account: zero.Mut(TreeAccount),
-    pool_token_account: zero.Mut(PoolTokenAccount),
-    nullifier_account: zero.Mut(NullifierAccount),
+    tree_account: zero.Mut(0),
+    pool_token_account: zero.Mut(0),
+    nullifier_account: zero.Mut(0),
     recipient: zero.Mut(0),
     fee_recipient: zero.Mut(0),
-    global_config: zero.Readonly(GlobalConfig),
-    system_program: zero.Program(sol.system_program.id),
+    global_config: zero.Readonly(0),
+    system_program: zero.Readonly(0),
 };
 
 /// Transact accounts (Privacy Cash compatible)
 const TransactAccounts = struct {
     signer: zero.Signer(0),
-    tree_account: zero.Mut(TreeAccount),
-    pool_token_account: zero.Mut(PoolTokenAccount),
-    nullifier_account1: zero.Mut(NullifierAccount),
-    nullifier_account2: zero.Mut(NullifierAccount),
+    tree_account: zero.Mut(0),
+    pool_token_account: zero.Mut(0),
+    nullifier_account1: zero.Mut(0),
+    nullifier_account2: zero.Mut(0),
     recipient: zero.Mut(0),
     fee_recipient: zero.Mut(0),
-    global_config: zero.Readonly(GlobalConfig),
-    system_program: zero.Program(sol.system_program.id),
+    global_config: zero.Readonly(0),
+    system_program: zero.Readonly(0),
 };
 
 // ============================================================================
@@ -410,73 +411,259 @@ pub fn validateFee(
 }
 
 // ============================================================================
+// Error Codes
+// ============================================================================
+
+pub const PrivacyPoolError = error{
+    /// Deposit exceeds maximum allowed amount
+    DepositLimitExceeded,
+    /// Merkle tree is full
+    TreeFull,
+    /// Unknown Merkle root
+    UnknownRoot,
+    /// Nullifier has already been used
+    NullifierAlreadyUsed,
+    /// Invalid ZK proof
+    InvalidProof,
+    /// Invalid fee amount
+    InvalidFee,
+    /// Insufficient funds in pool
+    InsufficientFunds,
+    /// Arithmetic overflow
+    ArithmeticOverflow,
+    /// Unauthorized operation
+    Unauthorized,
+};
+
+// ============================================================================
 // Instruction Handlers
 // ============================================================================
 
 /// Initialize a new privacy pool
 fn initializeHandler(ctx: *const zero.Ctx(InitializeAccounts)) !void {
     const args = ctx.args(InitializeArgs);
-    _ = args;
+    const accounts = ctx.accounts();
 
-    // In real implementation:
-    // 1. Initialize tree_account with empty Merkle tree
-    // 2. Set authority
-    // 3. Set max_deposit_amount
-    // 4. Initialize global_config with default fees
+    // Get account data slices and cast to typed pointers
+    const tree_data = accounts.tree_account.data();
+    const pool_data = accounts.pool_token_account.data();
+    const config_data = accounts.global_config.data();
 
-    sol.log.print("Privacy pool initialized", .{});
+    const tree_account: *TreeAccount = @ptrCast(@alignCast(tree_data.ptr));
+    const pool_token: *PoolTokenAccount = @ptrCast(@alignCast(pool_data.ptr));
+    const global_config: *GlobalConfig = @ptrCast(@alignCast(config_data.ptr));
+
+    // Set authority
+    const authority_key = accounts.authority.id().*;
+    tree_account.authority = authority_key;
+    pool_token.authority = authority_key;
+    global_config.authority = authority_key;
+
+    // Initialize tree account
+    tree_account.next_index = 0;
+    tree_account.root_index = 0;
+    tree_account.max_deposit_amount = args.max_deposit_amount;
+    tree_account.height = MERKLE_TREE_HEIGHT;
+    tree_account.root_history_size = ROOT_HISTORY_SIZE;
+
+    // Initialize Merkle tree with zero hashes
+    for (0..MERKLE_TREE_HEIGHT) |level| {
+        tree_account.filled_subtrees[level] = zeroHash(@truncate(level));
+    }
+
+    // Set initial root (empty tree root)
+    var current = zeroHash(0);
+    for (0..MERKLE_TREE_HEIGHT) |level| {
+        current = poseidonHash2(current, zeroHash(@truncate(level)));
+    }
+    tree_account.root_history[0] = current;
+
+    // Initialize global config with default fees
+    global_config.deposit_fee_rate = 0; // 0% deposit fee
+    global_config.withdrawal_fee_rate = 25; // 0.25% withdrawal fee
+    global_config.fee_error_margin = 500; // 5% margin
+
+    sol.log.print("Privacy pool initialized with max deposit: {}", .{args.max_deposit_amount});
 }
 
 /// Deposit funds into the privacy pool
 fn depositHandler(ctx: *const zero.Ctx(DepositAccounts)) !void {
     const args = ctx.args(DepositArgs);
-    _ = args;
+    const accounts = ctx.accounts();
 
-    // In real implementation:
-    // 1. Validate deposit amount <= max_deposit_amount
+    // Get typed account data
+    const tree_data = accounts.tree_account.data();
+    const tree_account: *TreeAccount = @ptrCast(@alignCast(tree_data.ptr));
+
+    // 1. Validate deposit amount
+    if (args.amount > tree_account.max_deposit_amount) {
+        sol.log.print("Deposit {} exceeds limit {}", .{ args.amount, tree_account.max_deposit_amount });
+        return PrivacyPoolError.DepositLimitExceeded;
+    }
+
     // 2. Transfer lamports from depositor to pool
-    // 3. Insert commitment into Merkle tree
-    // 4. Emit deposit event
+    const depositor_lamports = accounts.depositor.lamports();
+    const pool_lamports = accounts.pool_token_account.lamports();
 
-    sol.log.print("Deposit processed", .{});
+    // Check depositor has enough lamports
+    if (depositor_lamports.* < args.amount) {
+        return PrivacyPoolError.InsufficientFunds;
+    }
+
+    // Transfer
+    depositor_lamports.* -= args.amount;
+    pool_lamports.* += args.amount;
+
+    // 3. Insert commitment into Merkle tree
+    const new_root = insertLeaf(tree_account, args.commitment) catch |err| {
+        sol.log.print("Failed to insert leaf: {}", .{@intFromError(err)});
+        return PrivacyPoolError.TreeFull;
+    };
+
+    sol.log.print("Deposit processed: {} lamports, leaf index: {}", .{ args.amount, tree_account.next_index - 1 });
+    sol.log.print("New root: {x}", .{new_root});
 }
 
 /// Withdraw funds from the privacy pool
 fn withdrawHandler(ctx: *const zero.Ctx(WithdrawAccounts)) !void {
     const args = ctx.args(WithdrawArgs);
-    _ = args;
+    const accounts = ctx.accounts();
 
-    // In real implementation:
+    // Get typed account data
+    const tree_data = accounts.tree_account.data();
+    const tree_account: *const TreeAccount = @ptrCast(@alignCast(tree_data.ptr));
+
+    const nullifier_data = accounts.nullifier_account.data();
+    const nullifier_account: *NullifierAccount = @ptrCast(@alignCast(nullifier_data.ptr));
+
+    const config_data = accounts.global_config.data();
+    const global_config: *const GlobalConfig = @ptrCast(@alignCast(config_data.ptr));
+
     // 1. Verify Merkle root is known
-    // 2. Verify nullifier not already used
-    // 3. Verify Groth16 proof
-    // 4. Mark nullifier as used
-    // 5. Transfer funds to recipient
-    // 6. Transfer fee to fee_recipient
+    if (!tree_account.isKnownRoot(args.root)) {
+        sol.log.print("Unknown root", .{});
+        return PrivacyPoolError.UnknownRoot;
+    }
 
-    sol.log.print("Withdrawal processed", .{});
+    // 2. Verify nullifier not already used (check if account has non-zero data)
+    var nullifier_empty = true;
+    for (nullifier_account.nullifier) |b| {
+        if (b != 0) {
+            nullifier_empty = false;
+            break;
+        }
+    }
+    if (!nullifier_empty) {
+        sol.log.print("Nullifier already used", .{});
+        return PrivacyPoolError.NullifierAlreadyUsed;
+    }
+
+    // 3. Verify Groth16 proof
+    const public_inputs: [NR_PUBLIC_INPUTS][32]u8 = .{
+        args.root,
+        args.nullifier_hash,
+        args.recipient.bytes,
+        [_]u8{0} ** 32, // placeholder for other inputs
+        [_]u8{0} ** 32,
+        [_]u8{0} ** 32,
+        [_]u8{0} ** 32,
+    };
+
+    if (!verifyGroth16(args.proof_a, args.proof_b, args.proof_c, public_inputs)) {
+        sol.log.print("Invalid proof", .{});
+        return PrivacyPoolError.InvalidProof;
+    }
+
+    // 4. Validate fee
+    const fee_rate = global_config.withdrawal_fee_rate;
+    const expected_fee = calculateFee(args.amount, fee_rate);
+    if (args.fee < expected_fee) {
+        sol.log.print("Insufficient fee: {} < {}", .{ args.fee, expected_fee });
+        return PrivacyPoolError.InvalidFee;
+    }
+
+    // 5. Mark nullifier as used
+    nullifier_account.nullifier = args.nullifier_hash;
+
+    // 6. Transfer funds from pool
+    const pool_lamports = accounts.pool_token_account.lamports();
+    const recipient_lamports = accounts.recipient.lamports();
+    const fee_recipient_lamports = accounts.fee_recipient.lamports();
+
+    const total_out = args.amount + args.fee;
+    if (pool_lamports.* < total_out) {
+        return PrivacyPoolError.InsufficientFunds;
+    }
+
+    // Transfer to recipient
+    pool_lamports.* -= args.amount;
+    recipient_lamports.* += args.amount;
+
+    // Transfer fee
+    if (args.fee > 0) {
+        pool_lamports.* -= args.fee;
+        fee_recipient_lamports.* += args.fee;
+    }
+
+    sol.log.print("Withdrawal processed: {} lamports, fee: {}", .{ args.amount, args.fee });
 }
 
 /// Combined deposit/withdraw transaction (Privacy Cash compatible)
 fn transactHandler(ctx: *const zero.Ctx(TransactAccounts)) !void {
     const args = ctx.args(TransactArgs);
+    const accounts = ctx.accounts();
+
+    // Get typed account data
+    const tree_data = accounts.tree_account.data();
+    const tree_account: *TreeAccount = @ptrCast(@alignCast(tree_data.ptr));
+
+    const null1_data = accounts.nullifier_account1.data();
+    const nullifier1: *NullifierAccount = @ptrCast(@alignCast(null1_data.ptr));
+
+    const null2_data = accounts.nullifier_account2.data();
+    const nullifier2: *NullifierAccount = @ptrCast(@alignCast(null2_data.ptr));
+
+    const config_data = accounts.global_config.data();
+    const global_config: *const GlobalConfig = @ptrCast(@alignCast(config_data.ptr));
 
     // 1. Verify root is in history
-    // (would access tree_account here)
-
-    // 2. Calculate and validate fees
-    if (!validateFee(args.ext_amount, args.fee, &GlobalConfig{
-        .authority = .{ .bytes = [_]u8{0} ** 32 },
-        .deposit_fee_rate = 0,
-        .withdrawal_fee_rate = 25,
-        .fee_error_margin = 500,
-        .bump = 0,
-        ._padding = 0,
-    })) {
-        return error.InvalidFee;
+    if (!tree_account.isKnownRoot(args.root)) {
+        sol.log.print("Unknown root", .{});
+        return PrivacyPoolError.UnknownRoot;
     }
 
-    // 3. Verify Groth16 proof
+    // 2. Check nullifiers are not used
+    var null1_empty = true;
+    for (nullifier1.nullifier) |b| {
+        if (b != 0) {
+            null1_empty = false;
+            break;
+        }
+    }
+    if (!null1_empty) {
+        sol.log.print("Nullifier 1 already used", .{});
+        return PrivacyPoolError.NullifierAlreadyUsed;
+    }
+
+    var null2_empty = true;
+    for (nullifier2.nullifier) |b| {
+        if (b != 0) {
+            null2_empty = false;
+            break;
+        }
+    }
+    if (!null2_empty) {
+        sol.log.print("Nullifier 2 already used", .{});
+        return PrivacyPoolError.NullifierAlreadyUsed;
+    }
+
+    // 3. Validate fees
+    if (!validateFee(args.ext_amount, args.fee, global_config)) {
+        sol.log.print("Invalid fee", .{});
+        return PrivacyPoolError.InvalidFee;
+    }
+
+    // 4. Verify Groth16 proof
     const public_inputs: [NR_PUBLIC_INPUTS][32]u8 = .{
         args.root,
         args.public_amount,
@@ -488,23 +675,64 @@ fn transactHandler(ctx: *const zero.Ctx(TransactAccounts)) !void {
     };
 
     if (!verifyGroth16(args.proof_a, args.proof_b, args.proof_c, public_inputs)) {
-        return error.InvalidProof;
+        sol.log.print("Invalid proof", .{});
+        return PrivacyPoolError.InvalidProof;
     }
 
-    // 4. Process deposit or withdrawal
+    // 5. Mark nullifiers as used
+    nullifier1.nullifier = args.input_nullifier1;
+    nullifier2.nullifier = args.input_nullifier2;
+
+    // 6. Process deposit or withdrawal
+    const pool_lamports = accounts.pool_token_account.lamports();
+    const signer_lamports = accounts.signer.lamports();
+    const recipient_lamports = accounts.recipient.lamports();
+    const fee_recipient_lamports = accounts.fee_recipient.lamports();
+
     if (args.ext_amount > 0) {
-        // Deposit: transfer SOL to pool
-        sol.log.print("Processing deposit: {} lamports", .{@as(u64, @intCast(args.ext_amount))});
+        // Deposit: transfer SOL from signer to pool
+        const deposit_amount: u64 = @intCast(args.ext_amount);
+
+        if (signer_lamports.* < deposit_amount) {
+            return PrivacyPoolError.InsufficientFunds;
+        }
+
+        signer_lamports.* -= deposit_amount;
+        pool_lamports.* += deposit_amount;
+
+        sol.log.print("Deposit: {} lamports", .{deposit_amount});
     } else if (args.ext_amount < 0) {
         // Withdrawal: transfer SOL from pool to recipient
         const withdraw_amount: u64 = @intCast(-args.ext_amount);
-        sol.log.print("Processing withdrawal: {} lamports", .{withdraw_amount});
+
+        const total_out = withdraw_amount + args.fee;
+        if (pool_lamports.* < total_out) {
+            return PrivacyPoolError.InsufficientFunds;
+        }
+
+        pool_lamports.* -= withdraw_amount;
+        recipient_lamports.* += withdraw_amount;
+
+        if (args.fee > 0) {
+            pool_lamports.* -= args.fee;
+            fee_recipient_lamports.* += args.fee;
+        }
+
+        sol.log.print("Withdrawal: {} lamports, fee: {}", .{ withdraw_amount, args.fee });
     }
 
-    // 5. Insert output commitments into tree
-    // (would call insertLeaf for each output commitment)
+    // 7. Insert output commitments into tree
+    _ = insertLeaf(tree_account, args.output_commitment1) catch |err| {
+        sol.log.print("Failed to insert commitment 1: {}", .{@intFromError(err)});
+        return PrivacyPoolError.TreeFull;
+    };
 
-    sol.log.print("Transaction processed", .{});
+    _ = insertLeaf(tree_account, args.output_commitment2) catch |err| {
+        sol.log.print("Failed to insert commitment 2: {}", .{@intFromError(err)});
+        return PrivacyPoolError.TreeFull;
+    };
+
+    sol.log.print("Transaction processed successfully", .{});
 }
 
 // ============================================================================
