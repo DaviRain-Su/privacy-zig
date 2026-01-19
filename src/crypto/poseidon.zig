@@ -329,3 +329,20 @@ test "poseidon: field arithmetic" {
     const tripled = fieldMul3(ONE);
     try std.testing.expectEqual(@as(u8, 3), tripled[31]);
 }
+
+test "poseidon: mcl availability" {
+    // This test reports which implementation is being used
+    if (mcl.mcl_available) {
+        std.debug.print("\n[INFO] Using MCL for BN254 field arithmetic\n", .{});
+        // Test MCL Fr operations
+        mcl.init() catch |e| {
+            std.debug.print("[ERROR] MCL init failed: {}\n", .{e});
+            return error.MclInitFailed;
+        };
+        const fr = mcl.Fr.fromInt(42);
+        try std.testing.expect(!fr.isZero());
+        try std.testing.expect(!fr.isOne());
+    } else {
+        std.debug.print("\n[INFO] Using software fallback (MCL not linked)\n", .{});
+    }
+}

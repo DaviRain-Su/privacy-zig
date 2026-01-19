@@ -4,10 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Get solana-program-sdk dependency
+    // MCL option for off-chain BN254 operations (Poseidon hash)
+    const with_mcl = b.option(bool, "with-mcl", "Enable MCL library for correct BN254 field arithmetic") orelse false;
+
+    // Get solana-program-sdk dependency with MCL option
     const solana_sdk_dep = b.dependency("solana_program_sdk", .{
         .target = target,
         .optimize = optimize,
+        .@"with-mcl" = with_mcl,
     });
     const solana_sdk_mod = solana_sdk_dep.module("solana_program_sdk");
 
@@ -30,6 +34,13 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+
+    // Link MCL library for tests if enabled
+    if (with_mcl) {
+        tests.addObjectFile(solana_sdk_dep.path("vendor/mcl/lib/libmcl.a"));
+        tests.root_module.addIncludePath(solana_sdk_dep.path("vendor/mcl/include"));
+        tests.linkLibCpp();
+    }
 
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
