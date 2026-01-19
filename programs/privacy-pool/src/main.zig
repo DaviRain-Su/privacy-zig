@@ -16,78 +16,8 @@
 //! - transact: Combined deposit/withdraw (Privacy Cash compatible)
 
 const std = @import("std");
-const builtin = @import("builtin");
-
-// Conditional imports for BPF vs native
-// Matching solana-program-sdk-zig/src/bpf.zig
-pub const is_bpf_program = !builtin.is_test and
-    ((builtin.os.tag == .freestanding and
-    builtin.cpu.arch == .bpfel and
-    std.Target.bpf.featureSetHas(builtin.cpu.features, .solana)) or
-    builtin.cpu.arch == .sbf);
-
-const sol = if (is_bpf_program) @import("solana_program_sdk") else struct {
-    pub const PublicKey = extern struct {
-        bytes: [32]u8,
-
-        pub fn comptimeFromBase58(comptime _: []const u8) PublicKey {
-            return .{ .bytes = [_]u8{0} ** 32 };
-        }
-
-        pub fn equals(self: *const PublicKey, other: *const PublicKey) bool {
-            return std.mem.eql(u8, &self.bytes, &other.bytes);
-        }
-    };
-
-    pub const Account = struct {
-        pub const Info = struct {
-            key: *const PublicKey,
-            lamports: *u64,
-            data: []u8,
-            owner: *const PublicKey,
-            is_signer: bool,
-            is_writable: bool,
-        };
-    };
-
-    pub const log = struct {
-        pub fn print(comptime fmt: []const u8, args: anytype) void {
-            _ = fmt;
-            _ = args;
-        }
-    };
-
-    pub const system_program = struct {
-        pub const id: PublicKey = .{ .bytes = [_]u8{0} ** 32 };
-    };
-};
-
-const anchor = if (is_bpf_program) @import("sol_anchor_zig") else struct {
-    pub const zero_cu = struct {
-        pub fn Signer(comptime _: usize) type {
-            return struct {};
-        }
-        pub fn Mut(comptime _: type) type {
-            return struct {};
-        }
-        pub fn Account(comptime _: type, comptime _: anytype) type {
-            return struct {};
-        }
-        pub fn Readonly(comptime _: anytype) type {
-            return struct {};
-        }
-        pub fn Program(comptime _: anytype) type {
-            return struct {};
-        }
-        pub fn Ctx(comptime _: type) type {
-            return struct {};
-        }
-        pub fn program(comptime _: anytype) void {}
-        pub fn ix(comptime _: []const u8, comptime _: type, comptime _: anytype) void {}
-        pub fn ixValidated(comptime _: []const u8, comptime _: type, comptime _: anytype) void {}
-    };
-};
-
+const sol = @import("solana_program_sdk");
+const anchor = @import("sol_anchor_zig");
 const zero = anchor.zero_cu;
 
 // ============================================================================
@@ -442,15 +372,9 @@ pub fn verifyGroth16(
 
     _ = proof_b;
 
-    if (is_bpf_program) {
-        // BPF: Use alt_bn128 syscalls for real verification
-        // Real implementation would call:
-        // sol.syscalls.sol_alt_bn128_group_op(...)
-        return true;
-    } else {
-        // Native: placeholder for testing
-        return true;
-    }
+    // TODO: Implement actual Groth16 verification using alt_bn128 syscalls
+    // Real implementation would call sol.bn254 functions
+    return true;
 }
 
 // ============================================================================
@@ -490,8 +414,8 @@ pub fn validateFee(
 // ============================================================================
 
 /// Initialize a new privacy pool
-pub fn initialize(ctx: zero.Ctx(InitializeAccounts), args: InitializeArgs) !void {
-    _ = ctx;
+fn initializeHandler(ctx: *const zero.Ctx(InitializeAccounts)) !void {
+    const args = ctx.args(InitializeArgs);
     _ = args;
 
     // In real implementation:
@@ -504,8 +428,8 @@ pub fn initialize(ctx: zero.Ctx(InitializeAccounts), args: InitializeArgs) !void
 }
 
 /// Deposit funds into the privacy pool
-pub fn deposit(ctx: zero.Ctx(DepositAccounts), args: DepositArgs) !void {
-    _ = ctx;
+fn depositHandler(ctx: *const zero.Ctx(DepositAccounts)) !void {
+    const args = ctx.args(DepositArgs);
     _ = args;
 
     // In real implementation:
@@ -518,8 +442,8 @@ pub fn deposit(ctx: zero.Ctx(DepositAccounts), args: DepositArgs) !void {
 }
 
 /// Withdraw funds from the privacy pool
-pub fn withdraw(ctx: zero.Ctx(WithdrawAccounts), args: WithdrawArgs) !void {
-    _ = ctx;
+fn withdrawHandler(ctx: *const zero.Ctx(WithdrawAccounts)) !void {
+    const args = ctx.args(WithdrawArgs);
     _ = args;
 
     // In real implementation:
@@ -534,8 +458,8 @@ pub fn withdraw(ctx: zero.Ctx(WithdrawAccounts), args: WithdrawArgs) !void {
 }
 
 /// Combined deposit/withdraw transaction (Privacy Cash compatible)
-pub fn transact(ctx: zero.Ctx(TransactAccounts), args: TransactArgs) !void {
-    _ = ctx;
+fn transactHandler(ctx: *const zero.Ctx(TransactAccounts)) !void {
+    const args = ctx.args(TransactArgs);
 
     // 1. Verify root is in history
     // (would access tree_account here)
@@ -587,15 +511,14 @@ pub fn transact(ctx: zero.Ctx(TransactAccounts), args: TransactArgs) !void {
 // Program Entry Point
 // ============================================================================
 
+// Program entry point
 comptime {
-    if (is_bpf_program) {
-        zero.program(.{
-            zero.ix("initialize", InitializeAccounts, initialize),
-            zero.ix("deposit", DepositAccounts, deposit),
-            zero.ix("withdraw", WithdrawAccounts, withdraw),
-            zero.ix("transact", TransactAccounts, transact),
-        });
-    }
+    zero.program(.{
+        zero.ix("initialize", InitializeAccounts, initializeHandler),
+        zero.ix("deposit", DepositAccounts, depositHandler),
+        zero.ix("withdraw", WithdrawAccounts, withdrawHandler),
+        zero.ix("transact", TransactAccounts, transactHandler),
+    });
 }
 
 // ============================================================================
