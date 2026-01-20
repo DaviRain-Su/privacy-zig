@@ -36,6 +36,11 @@
           "name": "authority",
           "writable": true,
           "signer": true
+        },
+        {
+          "name": "system_program",
+          "writable": false,
+          "signer": false
         }
       ],
       "args": [
