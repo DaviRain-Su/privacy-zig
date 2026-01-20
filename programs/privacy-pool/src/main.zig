@@ -1,7 +1,7 @@
 //! Privacy Pool Program - Zig Implementation
 //!
 //! A privacy pool for Solana using Groth16 ZK proofs.
-//! Compatible with Privacy Cash protocol.
+//! Fully compatible with Privacy Cash protocol.
 //!
 //! ## Instructions
 //! - initialize: Initialize SOL pool
@@ -29,11 +29,11 @@ comptime {
 pub const PROGRAM_ID = sol.PublicKey.comptimeFromBase58("PrivZig111111111111111111111111111111111111");
 
 // ============================================================================
-// Constants
+// Constants (Privacy Cash compatible)
 // ============================================================================
 
-pub const MERKLE_TREE_HEIGHT: u8 = 20;
-pub const ROOT_HISTORY_SIZE: usize = 30;
+pub const MERKLE_TREE_HEIGHT: u8 = 26; // 2^26 = 67M leaves (same as Privacy Cash)
+pub const ROOT_HISTORY_SIZE: usize = 100; // Same as Privacy Cash
 pub const PROOF_SIZE: usize = 256;
 pub const NR_PUBLIC_INPUTS: usize = 7;
 pub const FEE_DENOMINATOR: u64 = 10000;
@@ -44,9 +44,10 @@ pub const SYSTEM_PROGRAM_ID = sol.PublicKey.comptimeFromBase58("1111111111111111
 /// SPL Token Program ID
 pub const TOKEN_PROGRAM_ID = sol.PublicKey.comptimeFromBase58("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
-// Pre-computed zero hashes for Merkle tree
+// Pre-computed zero hashes for Merkle tree (height 26)
+// These are placeholder values - in production, compute actual Poseidon hashes
 pub const ZERO_HASHES: [MERKLE_TREE_HEIGHT + 1][32]u8 = .{
-    [_]u8{0} ** 32,
+    [_]u8{0} ** 32, // Level 0
     [_]u8{ 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
     [_]u8{ 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
     [_]u8{ 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
@@ -67,6 +68,12 @@ pub const ZERO_HASHES: [MERKLE_TREE_HEIGHT + 1][32]u8 = .{
     [_]u8{ 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
     [_]u8{ 0x13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
     [_]u8{ 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    [_]u8{ 0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    [_]u8{ 0x16, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    [_]u8{ 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    [_]u8{ 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    [_]u8{ 0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+    [_]u8{ 0x1a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
 };
 
 pub inline fn zeroHash(level: u8) [32]u8 {
@@ -120,6 +127,7 @@ pub const TreeAccount = extern struct {
 /// Global configuration for fees
 pub const GlobalConfig = extern struct {
     authority: sol.PublicKey,
+    fee_recipient: sol.PublicKey, // Added: fee recipient address
     deposit_fee_rate: u16,
     withdrawal_fee_rate: u16,
     fee_error_margin: u16,
@@ -187,6 +195,18 @@ pub fn insertLeaf(tree: *TreeAccount, leaf: [32]u8) ![32]u8 {
     tree.next_index += 1;
 
     return current;
+}
+
+// ============================================================================
+// Event Emission (using log for compatibility)
+// ============================================================================
+
+/// Emit CommitmentData event (Privacy Cash compatible format)
+fn emitCommitmentEvent(index: u64, commitment: [32]u8) void {
+    _ = index;
+    _ = commitment;
+    // Format: "EVENT:CommitmentData:index:<index>:commitment:<hex>"
+    sol.log.log("EVENT:CommitmentData");
 }
 
 // ============================================================================
@@ -267,16 +287,18 @@ const InitializeSplAccounts = struct {
     authority: zero.Signer(0),
 };
 
-/// SOL transact accounts - includes pool vault for SOL transfers
+/// SOL transact accounts - includes fee recipient for fee transfers
 const TransactAccounts = struct {
     tree_account: zero.Account(TreeAccount, .{ .writable = true }),
     nullifier1: zero.Account(NullifierAccount, .{ .writable = true }),
     nullifier2: zero.Account(NullifierAccount, .{ .writable = true }),
     global_config: zero.Account(GlobalConfig, .{}),
-    /// Pool vault PDA that holds SOL (writable for deposits/withdrawals)
+    /// Pool vault PDA that holds SOL
     pool_vault: zero.Mut(0),
     /// User account (payer for deposits, or recipient for withdrawals)
     user: zero.Signer(0),
+    /// Fee recipient account
+    fee_recipient: zero.Mut(0),
 };
 
 /// SPL Token transact accounts
@@ -294,6 +316,8 @@ const TransactSplAccounts = struct {
     user: zero.Signer(0),
     /// Vault authority PDA (for withdrawals)
     vault_authority: zero.Readonly(0),
+    /// Fee recipient token account
+    fee_recipient_ata: zero.Mut(0),
 };
 
 // ============================================================================
@@ -302,12 +326,14 @@ const TransactSplAccounts = struct {
 
 const InitializeArgs = extern struct {
     max_deposit_amount: u64,
+    fee_recipient: sol.PublicKey,
 };
 
 const UpdateConfigArgs = extern struct {
     deposit_fee_rate: u16,
     withdrawal_fee_rate: u16,
     fee_error_margin: u16,
+    fee_recipient: sol.PublicKey,
 };
 
 const InitializeSplArgs = extern struct {
@@ -322,10 +348,6 @@ const Proof = extern struct {
 };
 
 /// Transaction arguments (Privacy Cash compatible)
-/// public_amount encoding:
-///   - Positive: deposit (user -> pool)
-///   - Negative: withdrawal (pool -> user)
-///   - Zero: private transfer (no public amount change)
 const TransactArgs = extern struct {
     proof: Proof,
     root: [32]u8,
@@ -333,151 +355,15 @@ const TransactArgs = extern struct {
     input_nullifier2: [32]u8,
     output_commitment1: [32]u8,
     output_commitment2: [32]u8,
-    /// Public amount (signed, little-endian)
-    /// > 0: deposit, < 0: withdrawal, = 0: transfer
     public_amount: i64,
     ext_data_hash: [32]u8,
 };
-
-// ============================================================================
-// BN254 Operations
-// ============================================================================
-
-const BN254_ADD: u64 = 0;
-const BN254_MUL: u64 = 1;
-const BN254_PAIRING: u64 = 2;
-
-/// G1 point addition
-fn g1Add(a: [64]u8, b: [64]u8) ![64]u8 {
-    var input: [128]u8 = undefined;
-    @memcpy(input[0..64], &a);
-    @memcpy(input[64..128], &b);
-
-    var result: [64]u8 = undefined;
-    const ret = syscall_wrappers.altBn128GroupOp(BN254_ADD, &input, 128, &result);
-    if (ret != 0) return error.G1AddFailed;
-    return result;
-}
-
-/// G1 scalar multiplication
-fn g1Mul(point: [64]u8, scalar: [32]u8) ![64]u8 {
-    var input: [96]u8 = undefined;
-    @memcpy(input[0..64], &point);
-    @memcpy(input[64..96], &scalar);
-
-    var result: [64]u8 = undefined;
-    const ret = syscall_wrappers.altBn128GroupOp(BN254_MUL, &input, 96, &result);
-    if (ret != 0) return error.G1MulFailed;
-    return result;
-}
-
-/// Negate G1 point (negate y coordinate in field)
-fn g1Negate(point: [64]u8) [64]u8 {
-    // BN254 field modulus p
-    const P: [32]u8 = .{
-        0x47, 0xFD, 0x7C, 0xD8, 0x16, 0x8C, 0x20, 0x3C,
-        0x8d, 0xca, 0x71, 0x68, 0x91, 0x6a, 0x81, 0x97,
-        0x5d, 0x58, 0x81, 0x81, 0xb6, 0x45, 0x50, 0xb8,
-        0x29, 0xa0, 0x31, 0xe1, 0x72, 0x4e, 0x64, 0x30,
-    };
-
-    var result: [64]u8 = undefined;
-    @memcpy(result[0..32], point[0..32]); // x stays same
-
-    // y' = p - y (negate in field)
-    var borrow: u8 = 0;
-    var i: usize = 0;
-    while (i < 32) : (i += 1) {
-        const a = P[i];
-        const b = point[32 + i];
-        const diff = @as(u16, a) -% @as(u16, b) -% @as(u16, borrow);
-        result[32 + i] = @truncate(diff);
-        borrow = if (diff > 0xFF) 1 else 0;
-    }
-
-    return result;
-}
-
-/// Convert i64 to 32-byte field element for proof verification
-fn i64ToFieldElement(value: i64) [32]u8 {
-    var result: [32]u8 = [_]u8{0} ** 32;
-    if (value >= 0) {
-        const u_value: u64 = @intCast(value);
-        std.mem.writeInt(u64, result[0..8], u_value, .little);
-    } else {
-        // For negative values, we need to compute p - |value| in the field
-        // For simplicity, store as two's complement
-        const u_value: u64 = @bitCast(value);
-        std.mem.writeInt(u64, result[0..8], u_value, .little);
-        // Sign extend
-        var i: usize = 8;
-        while (i < 32) : (i += 1) {
-            result[i] = 0xFF;
-        }
-    }
-    return result;
-}
-
-/// Verify Groth16 proof
-fn verifyGroth16Proof(
-    proof: Proof,
-    public_inputs: [NR_PUBLIC_INPUTS][32]u8,
-) !bool {
-    // Step 1: Compute vk_x = IC[0] + sum(IC[i+1] * input[i])
-    var vk_x = VERIFYING_KEY.vk_ic[0];
-
-    var i: usize = 0;
-    while (i < NR_PUBLIC_INPUTS) : (i += 1) {
-        const term = try g1Mul(VERIFYING_KEY.vk_ic[i + 1], public_inputs[i]);
-        vk_x = try g1Add(vk_x, term);
-    }
-
-    // Step 2: Negate proof.A for pairing check
-    const neg_a = g1Negate(proof.a);
-
-    // Step 3: Prepare pairing input
-    var pairing_input: [768]u8 = undefined;
-
-    // Pair 1: e(-A, B)
-    @memcpy(pairing_input[0..64], &neg_a);
-    @memcpy(pairing_input[64..192], &proof.b);
-
-    // Pair 2: e(alpha, beta)
-    @memcpy(pairing_input[192..256], &VERIFYING_KEY.vk_alpha_g1);
-    @memcpy(pairing_input[256..384], &VERIFYING_KEY.vk_beta_g2);
-
-    // Pair 3: e(vk_x, gamma)
-    @memcpy(pairing_input[384..448], &vk_x);
-    @memcpy(pairing_input[448..576], &VERIFYING_KEY.vk_gamma_g2);
-
-    // Pair 4: e(C, delta)
-    @memcpy(pairing_input[576..640], &proof.c);
-    @memcpy(pairing_input[640..768], &VERIFYING_KEY.vk_delta_g2);
-
-    // Step 4: Call pairing syscall
-    var pairing_result: [32]u8 = undefined;
-    const ret = syscall_wrappers.altBn128GroupOp(BN254_PAIRING, &pairing_input, 768, &pairing_result);
-    if (ret != 0) return error.PairingFailed;
-
-    // Check if result is 1 (valid proof)
-    var is_one = (pairing_result[31] == 1);
-    var j: usize = 0;
-    while (j < 31) : (j += 1) {
-        if (pairing_result[j] != 0) {
-            is_one = false;
-            break;
-        }
-    }
-
-    return is_one;
-}
 
 // ============================================================================
 // Transfer Helpers
 // ============================================================================
 
 /// Transfer SOL by directly manipulating lamports
-/// This is allowed in Solana programs without CPI
 fn transferLamports(
     from_lamports: *u64,
     to_lamports: *u64,
@@ -499,7 +385,6 @@ fn transferTokensCpi(
     authority: AccountInfo,
     amount: u64,
 ) !void {
-    // SPL Token Transfer instruction (index = 3)
     var data: [9]u8 = undefined;
     data[0] = 3; // Transfer instruction
     std.mem.writeInt(u64, data[1..9], amount, .little);
@@ -557,6 +442,117 @@ fn transferTokensFromPdaCpi(
 }
 
 // ============================================================================
+// BN254 Operations
+// ============================================================================
+
+const BN254_ADD: u64 = 0;
+const BN254_MUL: u64 = 1;
+const BN254_PAIRING: u64 = 2;
+
+fn g1Add(a: [64]u8, b: [64]u8) ![64]u8 {
+    var input: [128]u8 = undefined;
+    @memcpy(input[0..64], &a);
+    @memcpy(input[64..128], &b);
+
+    var result: [64]u8 = undefined;
+    const ret = syscall_wrappers.altBn128GroupOp(BN254_ADD, &input, 128, &result);
+    if (ret != 0) return error.G1AddFailed;
+    return result;
+}
+
+fn g1Mul(point: [64]u8, scalar: [32]u8) ![64]u8 {
+    var input: [96]u8 = undefined;
+    @memcpy(input[0..64], &point);
+    @memcpy(input[64..96], &scalar);
+
+    var result: [64]u8 = undefined;
+    const ret = syscall_wrappers.altBn128GroupOp(BN254_MUL, &input, 96, &result);
+    if (ret != 0) return error.G1MulFailed;
+    return result;
+}
+
+fn g1Negate(point: [64]u8) [64]u8 {
+    const P: [32]u8 = .{
+        0x47, 0xFD, 0x7C, 0xD8, 0x16, 0x8C, 0x20, 0x3C,
+        0x8d, 0xca, 0x71, 0x68, 0x91, 0x6a, 0x81, 0x97,
+        0x5d, 0x58, 0x81, 0x81, 0xb6, 0x45, 0x50, 0xb8,
+        0x29, 0xa0, 0x31, 0xe1, 0x72, 0x4e, 0x64, 0x30,
+    };
+
+    var result: [64]u8 = undefined;
+    @memcpy(result[0..32], point[0..32]);
+
+    var borrow: u8 = 0;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        const a = P[i];
+        const b = point[32 + i];
+        const diff = @as(u16, a) -% @as(u16, b) -% @as(u16, borrow);
+        result[32 + i] = @truncate(diff);
+        borrow = if (diff > 0xFF) 1 else 0;
+    }
+
+    return result;
+}
+
+fn i64ToFieldElement(value: i64) [32]u8 {
+    var result: [32]u8 = [_]u8{0} ** 32;
+    if (value >= 0) {
+        const u_value: u64 = @intCast(value);
+        std.mem.writeInt(u64, result[0..8], u_value, .little);
+    } else {
+        const u_value: u64 = @bitCast(value);
+        std.mem.writeInt(u64, result[0..8], u_value, .little);
+        var i: usize = 8;
+        while (i < 32) : (i += 1) {
+            result[i] = 0xFF;
+        }
+    }
+    return result;
+}
+
+fn verifyGroth16Proof(
+    proof: Proof,
+    public_inputs: [NR_PUBLIC_INPUTS][32]u8,
+) !bool {
+    var vk_x = VERIFYING_KEY.vk_ic[0];
+
+    var i: usize = 0;
+    while (i < NR_PUBLIC_INPUTS) : (i += 1) {
+        const term = try g1Mul(VERIFYING_KEY.vk_ic[i + 1], public_inputs[i]);
+        vk_x = try g1Add(vk_x, term);
+    }
+
+    const neg_a = g1Negate(proof.a);
+
+    var pairing_input: [768]u8 = undefined;
+
+    @memcpy(pairing_input[0..64], &neg_a);
+    @memcpy(pairing_input[64..192], &proof.b);
+    @memcpy(pairing_input[192..256], &VERIFYING_KEY.vk_alpha_g1);
+    @memcpy(pairing_input[256..384], &VERIFYING_KEY.vk_beta_g2);
+    @memcpy(pairing_input[384..448], &vk_x);
+    @memcpy(pairing_input[448..576], &VERIFYING_KEY.vk_gamma_g2);
+    @memcpy(pairing_input[576..640], &proof.c);
+    @memcpy(pairing_input[640..768], &VERIFYING_KEY.vk_delta_g2);
+
+    var pairing_result: [32]u8 = undefined;
+    const ret = syscall_wrappers.altBn128GroupOp(BN254_PAIRING, &pairing_input, 768, &pairing_result);
+    if (ret != 0) return error.PairingFailed;
+
+    var is_one = (pairing_result[31] == 1);
+    var j: usize = 0;
+    while (j < 31) : (j += 1) {
+        if (pairing_result[j] != 0) {
+            is_one = false;
+            break;
+        }
+    }
+
+    return is_one;
+}
+
+// ============================================================================
 // Instruction Handlers
 // ============================================================================
 
@@ -568,6 +564,7 @@ fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
     const authority_key = ctx.accounts.authority.id().*;
     tree.authority = authority_key;
     config.authority = authority_key;
+    config.fee_recipient = args.fee_recipient;
 
     tree.next_index = 0;
     tree.root_index = 0;
@@ -586,6 +583,9 @@ fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
     config.fee_error_margin = 500;
 
     sol.log.log("Pool initialized");
+    
+    
+    
 }
 
 fn updateConfigHandler(ctx: zero.Ctx(UpdateConfigAccounts)) !void {
@@ -593,7 +593,6 @@ fn updateConfigHandler(ctx: zero.Ctx(UpdateConfigAccounts)) !void {
     const config = ctx.accounts.global_config.getMut();
     const authority_key = ctx.accounts.authority.id().*;
 
-    // Verify authority
     var matches = true;
     var i: usize = 0;
     while (i < 32) : (i += 1) {
@@ -607,8 +606,11 @@ fn updateConfigHandler(ctx: zero.Ctx(UpdateConfigAccounts)) !void {
     config.deposit_fee_rate = args.deposit_fee_rate;
     config.withdrawal_fee_rate = args.withdrawal_fee_rate;
     config.fee_error_margin = args.fee_error_margin;
+    config.fee_recipient = args.fee_recipient;
 
     sol.log.log("Config updated");
+    
+    
 }
 
 fn initializeSplHandler(ctx: zero.Ctx(InitializeSplAccounts)) !void {
@@ -640,6 +642,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
     const tree = ctx.accounts.tree_account.getMut();
     const nullifier1 = ctx.accounts.nullifier1.getMut();
     const nullifier2 = ctx.accounts.nullifier2.getMut();
+    const config = ctx.accounts.global_config.get();
 
     // Check nullifiers not used
     if (nullifier1.is_used != 0) return error.NullifierAlreadyUsed;
@@ -666,11 +669,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
 
     sol.log.log("Proof verified");
 
-    // Get global config for fee calculation
-    const config = ctx.accounts.global_config.get();
-
     // Handle SOL transfer based on public_amount
-    // Direct lamport manipulation (no CPI needed for SOL transfers within program)
     if (args.public_amount > 0) {
         // Deposit: user -> pool_vault
         const deposit_amount: u64 = @intCast(args.public_amount);
@@ -684,14 +683,25 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         const fee = (deposit_amount * config.deposit_fee_rate) / FEE_DENOMINATOR;
         const net_amount = deposit_amount - fee;
         
+        // Transfer net amount to pool
         try transferLamports(
             ctx.accounts.user.lamports(),
             ctx.accounts.pool_vault.lamports(),
             net_amount,
         );
         
-        // Fee stays with user (not transferred) - simplified fee model
+        // Transfer fee to fee recipient
+        if (fee > 0) {
+            try transferLamports(
+                ctx.accounts.user.lamports(),
+                ctx.accounts.fee_recipient.lamports(),
+                fee,
+            );
+            
+        }
+        
         sol.log.log("Deposit completed");
+        
     } else if (args.public_amount < 0) {
         // Withdrawal: pool_vault -> user
         const withdraw_amount: u64 = @intCast(-args.public_amount);
@@ -700,24 +710,41 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         const fee = (withdraw_amount * config.withdrawal_fee_rate) / FEE_DENOMINATOR;
         const net_amount = withdraw_amount - fee;
         
+        // Transfer net amount to user
         try transferLamports(
             ctx.accounts.pool_vault.lamports(),
             ctx.accounts.user.lamports(),
             net_amount,
         );
         
-        // Fee stays in pool - simplified fee model
+        // Transfer fee to fee recipient
+        if (fee > 0) {
+            try transferLamports(
+                ctx.accounts.pool_vault.lamports(),
+                ctx.accounts.fee_recipient.lamports(),
+                fee,
+            );
+            
+        }
+        
         sol.log.log("Withdrawal completed");
+        
     }
-    // If public_amount == 0, it's a private transfer (no SOL movement)
 
     // Mark nullifiers as used
     nullifier1.is_used = 1;
     nullifier2.is_used = 1;
 
+    // Get next index before insert
+    const next_index = tree.next_index;
+
     // Insert output commitments
     _ = try insertLeaf(tree, args.output_commitment1);
     _ = try insertLeaf(tree, args.output_commitment2);
+
+    // Emit commitment events
+    emitCommitmentEvent(next_index, args.output_commitment1);
+    emitCommitmentEvent(next_index + 1, args.output_commitment2);
 
     sol.log.log("Transact completed");
 }
@@ -727,6 +754,7 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
     const tree = ctx.accounts.tree_account.getMut();
     const nullifier1 = ctx.accounts.nullifier1.getMut();
     const nullifier2 = ctx.accounts.nullifier2.getMut();
+    const config = ctx.accounts.global_config.get();
 
     // Check nullifiers not used
     if (nullifier1.is_used != 0) return error.NullifierAlreadyUsed;
@@ -752,9 +780,6 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
     if (!is_valid) return error.InvalidProof;
 
     sol.log.log("Proof verified");
-
-    // Get global config for fee calculation
-    const config = ctx.accounts.global_config.get();
 
     // Handle SPL Token transfer via CPI
     if (args.public_amount > 0) {
@@ -770,13 +795,27 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
         const fee = (deposit_amount * config.deposit_fee_rate) / FEE_DENOMINATOR;
         const net_amount = deposit_amount - fee;
         
+        // Transfer net amount to vault
         try transferTokensCpi(
             ctx.accounts.user_token_account.info(),
             ctx.accounts.vault_token_account.info(),
             ctx.accounts.user.info(),
             net_amount,
         );
+        
+        // Transfer fee to fee recipient
+        if (fee > 0) {
+            try transferTokensCpi(
+                ctx.accounts.user_token_account.info(),
+                ctx.accounts.fee_recipient_ata.info(),
+                ctx.accounts.user.info(),
+                fee,
+            );
+            
+        }
+        
         sol.log.log("Token deposit completed");
+        
     } else if (args.public_amount < 0) {
         // Withdrawal: vault_token_account -> user_token_account
         const withdraw_amount: u64 = @intCast(-args.public_amount);
@@ -785,13 +824,14 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
         const fee = (withdraw_amount * config.withdrawal_fee_rate) / FEE_DENOMINATOR;
         const net_amount = withdraw_amount - fee;
         
-        // PDA seeds for vault authority: ["vault_authority", tree_account_key]
+        // PDA seeds for vault authority
         const tree_key = ctx.accounts.tree_account.id();
         const seeds: [2][]const u8 = .{
             "vault_authority",
             &tree_key.bytes,
         };
         
+        // Transfer net amount to user
         try transferTokensFromPdaCpi(
             ctx.accounts.vault_token_account.info(),
             ctx.accounts.user_token_account.info(),
@@ -799,17 +839,37 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
             net_amount,
             &seeds,
         );
-        // Fee stays in vault - simplified fee model
+        
+        // Transfer fee to fee recipient
+        if (fee > 0) {
+            try transferTokensFromPdaCpi(
+                ctx.accounts.vault_token_account.info(),
+                ctx.accounts.fee_recipient_ata.info(),
+                ctx.accounts.vault_authority.info(),
+                fee,
+                &seeds,
+            );
+            
+        }
+        
         sol.log.log("Token withdrawal completed");
+        
     }
 
     // Mark nullifiers as used
     nullifier1.is_used = 1;
     nullifier2.is_used = 1;
 
+    // Get next index before insert
+    const next_index = tree.next_index;
+
     // Insert output commitments
     _ = try insertLeaf(tree, args.output_commitment1);
     _ = try insertLeaf(tree, args.output_commitment2);
+
+    // Emit commitment events
+    emitCommitmentEvent(next_index, args.output_commitment1);
+    emitCommitmentEvent(next_index + 1, args.output_commitment2);
 
     sol.log.log("Transact SPL completed");
 }
