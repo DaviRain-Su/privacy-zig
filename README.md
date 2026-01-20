@@ -227,6 +227,8 @@ ls -lh zig-out/lib/privacy_pool.so
 
 ## Roadmap
 
+### ✅ Completed
+
 - [x] Core cryptographic primitives
 - [x] Stealth address generation & scanning
 - [x] Merkle tree with proofs
@@ -235,11 +237,38 @@ ls -lh zig-out/lib/privacy_pool.so
 - [x] On-chain program with 4 instructions (initialize, deposit, withdraw, transact)
 - [x] Groth16 verification via alt_bn128 syscall
 - [x] Typed account access with get()/getMut()
+- [x] Full Privacy Cash compatibility (using transaction2.circom circuits)
+- [x] **Deployed to Solana Testnet** - Program ID: `Dz82AAVPumnUys5SQ8HMat5iD6xiBVMGC2xJiJdZkpbT`
+- [x] **Frontend DApp** (Next.js + TypeScript)
+  - [x] One-click anonymous transfer (deposit + withdraw in single flow)
+  - [x] Separate deposit/withdraw pages
+  - [x] Notes management with localStorage
+  - [x] Export/Import notes for backup
+  - [x] Wallet integration (Phantom, Solflare)
+- [x] **ZK Proof Generation** in browser (snarkjs + circomlibjs)
+- [x] **Client-side Merkle tree reconstruction** (no indexer needed)
+
+### 🚧 In Progress
+
 - [ ] Poseidon hash matching Light Protocol parameters
-- [ ] Full Privacy Cash compatibility (actual VK from trusted setup)
-- [ ] Frontend SDK (TypeScript)
-- [ ] Relayer support
+- [ ] Production deployment (Mainnet)
+
+### 📋 Planned
+
+- [ ] Relayer support (for better UX)
 - [ ] SPL Token support (USDC, USDT)
+- [ ] Mobile wallet support
+- [ ] Anonymity set analytics
+
+## Live Demo
+
+**Testnet DApp**: Run locally with `cd app && npm install && npm run dev`
+
+**Testnet Accounts**:
+- Program ID: `Dz82AAVPumnUys5SQ8HMat5iD6xiBVMGC2xJiJdZkpbT`
+- Tree Account: `2h8oJdtfe9AE8r3Dmp49iBruUMfQQMmo6r63q79vxUN1`
+- Global Config: `9qQELDcp6Z48tLpsDs6RtSQbYx5GpquxB4staTKQz15i`
+- Pool Vault: `Cd6ntF7dtCqWiEnitLyukEVKN7VaCVkF1ta9VryP2zYq`
 
 ## Privacy Cash Compatibility
 

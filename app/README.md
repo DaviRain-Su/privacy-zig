@@ -1,12 +1,28 @@
-# Privacy-Zig DApp
+# Privacy Pool DApp
 
-Anonymous Transfer on Solana - Break the transaction graph.
+A Next.js frontend for anonymous SOL transfers on Solana using zero-knowledge proofs.
 
 ## Features
 
-- 🔐 **Deposit SOL** - Generate a secret note and deposit into the privacy pool
-- 💸 **Withdraw** - Use your note to withdraw to any address (no link to depositor!)
-- 📝 **Manage Notes** - View and manage your deposit notes locally
+| Page | Description |
+|------|-------------|
+| `/transfer` | **One-click anonymous transfer** - Send SOL privately without managing notes |
+| `/deposit` | Deposit SOL to privacy pool, note saved to localStorage |
+| `/withdraw` | Withdraw using saved notes to any address |
+| `/notes` | View, export, import, and manage your private notes |
+
+## How It Works
+
+1. **Deposit**: User deposits SOL → ZK proof generated → Commitment added to Merkle tree → Note saved locally
+2. **Withdraw**: User selects note → ZK proof generated with Merkle path → Funds sent to recipient
+3. **Anonymous Transfer**: Combines deposit + withdraw in single flow (no notes needed)
+
+## Privacy Guarantees
+
+- ✅ No on-chain link between deposits and withdrawals
+- ✅ ZK proofs verify transaction validity without revealing details
+- ✅ Client-side proof generation (your secrets never leave your browser)
+- ✅ No indexer/relayer required (Merkle tree reconstructed from on-chain data)
 
 ## Quick Start
 
@@ -14,81 +30,50 @@ Anonymous Transfer on Solana - Break the transaction graph.
 # Install dependencies
 npm install
 
-# Start development server
+# Run development server
 npm run dev
+
+# Open http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
+## Configuration
 
-## How It Works
+The app connects to **Solana Testnet** by default.
 
+Program addresses (in `src/lib/privacy.ts`):
+```typescript
+PROGRAM_ID: 'Dz82AAVPumnUys5SQ8HMat5iD6xiBVMGC2xJiJdZkpbT'
+treeAccount: '2h8oJdtfe9AE8r3Dmp49iBruUMfQQMmo6r63q79vxUN1'
+globalConfig: '9qQELDcp6Z48tLpsDs6RtSQbYx5GpquxB4staTKQz15i'
 ```
-┌─────────────┐    deposit()    ┌──────────────┐   withdraw()    ┌─────────────┐
-│   Alice     │ ────────────>   │   Privacy    │ ────────────>   │    Bob      │
-│ (Sender)    │   commitment    │     Pool     │   ZK Proof      │ (New Addr)  │
-└─────────────┘                 └──────────────┘                 └─────────────┘
-```
 
-1. **Deposit**: Alice deposits SOL and receives a secret note
-2. **Pool Activity**: Other users deposit/withdraw (increases anonymity set)
-3. **Withdraw**: Use the note + ZK proof to withdraw to a new address
-4. **Privacy**: No on-chain link between Alice and the new address!
+## Notes Storage
 
-## Architecture
+Private notes are stored in **browser localStorage**:
 
-```
-app/
-├── src/
-│   ├── app/
-│   │   ├── page.tsx          # Landing page
-│   │   ├── deposit/page.tsx  # Deposit flow
-│   │   ├── withdraw/page.tsx # Withdrawal flow
-│   │   └── notes/page.tsx    # Note management
-│   ├── components/
-│   │   ├── Header.tsx        # Navigation
-│   │   └── WalletProvider.tsx
-│   └── lib/
-│       └── privacy.ts        # Core privacy functions
-└── package.json
-```
+⚠️ **Important**: Notes will be lost if you:
+- Clear browser data/cookies
+- Use incognito/private mode  
+- Switch browsers or devices
+
+👉 Use the **Export** feature in `/notes` to backup your notes!
 
 ## Tech Stack
 
 - **Next.js 14** - React framework
-- **TailwindCSS** - Styling
+- **Tailwind CSS** - Styling
+- **@solana/web3.js** - Solana interaction
 - **@solana/wallet-adapter** - Wallet connection
-- **circomlibjs** - Poseidon hash
 - **snarkjs** - ZK proof generation
+- **circomlibjs** - Poseidon hash
 
-## Network
+## Circuit Files
 
-Currently configured for **Solana Devnet**. 
+Place these in `public/circuits/`:
+- `transaction2.wasm` - Circuit WASM
+- `transaction2.zkey` - Proving key
 
-To switch networks, update `WalletProvider.tsx`:
-```typescript
-const endpoint = useMemo(() => clusterApiUrl('mainnet-beta'), []);
-```
-
-## Development
-
-```bash
-# Run dev server
-npm run dev
-
-# Build for production
-npm run build
-
-# Start production server
-npm start
-```
-
-## Security Notes
-
-⚠️ **Important**:
-- Secret notes are stored in browser localStorage
-- If you clear browser data, notes are lost forever
-- Always back up your notes externally
-- Never share your secret notes with anyone
+These are from Privacy Cash's trusted setup.
 
 ## License
 
