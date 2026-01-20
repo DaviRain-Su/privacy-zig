@@ -6,9 +6,10 @@ Anonymous SOL transfers using zero-knowledge proofs, built with Zig.
 
 ## Features
 
-- **Anonymous Transfers**: Send SOL with no on-chain link between sender and recipient
+- **Anonymous Transfers**: Send SOL with no on-chain link between sender and recipient (via relayer)
 - **ZK Proofs**: Groth16 proofs verified on-chain via alt_bn128 syscall
 - **Privacy Cash Compatible**: Uses same circuits and proof format
+- **Relayer Support**: Withdrawal is submitted by a relayer to hide the sender address
 - **Minimal Overhead**: Built with Zig for maximum performance (~160K CU per transaction)
 
 ## Architecture
@@ -31,6 +32,19 @@ cd app
 npm install
 npm run dev
 # Open http://localhost:3000
+```
+
+### Run the Relayer
+
+```bash
+cd relayer
+cargo run
+```
+
+Set the relayer URL in the app if needed:
+
+```bash
+export NEXT_PUBLIC_RELAYER_URL=http://localhost:3001
 ```
 
 ### Build On-chain Program
@@ -67,12 +81,24 @@ zig build
 1. DEPOSIT
    User deposits SOL → ZK proof generated → Commitment added to Merkle tree
    
-2. WITHDRAW  
-   User provides note → ZK proof with Merkle path → Funds sent to any address
+2. WITHDRAW (via Relayer)
+   User generates ZK proof → sends proof to relayer → relayer submits tx
+   The relayer pays the transaction fee, so the user's address is hidden.
    
 3. PRIVACY
    No on-chain link between deposit and withdrawal!
 ```
+
+### Anonymous Transfer Flow
+
+Anonymous transfers are implemented as **deposit + relayed withdraw**:
+
+1. **Deposit (public)**: User deposits SOL to the pool and creates a note.
+2. **Withdraw (private)**: The app generates a ZK proof and sends it to the relayer.
+3. **Relayer submit**: The relayer submits the withdrawal transaction so the
+   on-chain sender is the relayer, not the user.
+
+This preserves privacy while keeping the pool verifiable on-chain.
 
 ### Zero-Knowledge Circuit
 
