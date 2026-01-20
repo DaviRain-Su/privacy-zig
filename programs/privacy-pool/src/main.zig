@@ -513,33 +513,32 @@ fn i64ToFieldElement(value: i64) [32]u8 {
         const u_value: u64 = @intCast(value);
         // Big-endian: value goes at the END of the array
         std.mem.writeInt(u64, result[24..32], u_value, .big);
-    } else {
-        // Negative: compute FIELD_SIZE - |value| mod FIELD_SIZE
-        // For small negatives (which is our case), this is FIELD_SIZE + value
-        const abs_value: u64 = @intCast(-value);
-        
-        // Start with FIELD_SIZE
-        var field: [32]u8 = FIELD_SIZE;
-        
-        // Subtract abs_value from field (big-endian subtraction)
-        var borrow: u64 = abs_value;
-        var i: usize = 32;
-        while (i > 0) : (i -= 1) {
-            const idx = i - 1;
-            const byte_val: u64 = field[idx];
-            if (byte_val >= borrow) {
-                field[idx] = @truncate(byte_val - borrow);
-                borrow = 0;
-                break;
-            } else {
-                field[idx] = @truncate(256 + byte_val - (borrow % 256));
-                borrow = (borrow / 256) + 1;
-            }
-        }
-        
-        result = field;
+        return result;
     }
-    return result;
+
+    // Negative: compute FIELD_SIZE - |value| (proper big-endian subtraction)
+    const abs_value: u64 = @intCast(-value);
+    var field: [32]u8 = FIELD_SIZE;
+
+    var abs_bytes: [32]u8 = [_]u8{0} ** 32;
+    std.mem.writeInt(u64, abs_bytes[24..32], abs_value, .big);
+
+    var borrow: u16 = 0;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        const idx = 31 - i;
+        const byte_sub: u16 = abs_bytes[idx];
+        const total: u16 = byte_sub + borrow;
+        if (field[idx] < total) {
+            field[idx] = @intCast(@as(u16, field[idx]) + 256 - total);
+            borrow = 1;
+        } else {
+            field[idx] = @intCast(@as(u16, field[idx]) - total);
+            borrow = 0;
+        }
+    }
+
+    return field;
 }
 
 fn verifyGroth16Proof(
@@ -693,26 +692,71 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
     const null_space: u64 = 8 + 8; // discriminator + is_used
     const null_lamports = rent.getMinimumBalance(null_space);
     
+    // For withdraw, pay nullifier rent from pool_vault PDA (for privacy)
+    // For deposit, pay from signer
+    const is_withdraw = args.public_amount < 0;
+    
+    // Pre-compute vault bump once for withdraw (saves CU)
+    var vault_bump: u8 = 0;
+    if (is_withdraw) {
+        const pool_vault_info = ctx.accounts().pool_vault.info();
+        vault_bump = 255;
+        while (vault_bump > 0) : (vault_bump -= 1) {
+            const bump_slice = [_]u8{vault_bump};
+            const seeds_with_bump = [_][]const u8{ "pool_vault", &bump_slice };
+            const derived = sol.PublicKey.createProgramAddress(&seeds_with_bump, ctx.programId().*) catch continue;
+            if (std.mem.eql(u8, &derived.bytes, &pool_vault_info.id.bytes)) break;
+        }
+    }
+    
+    // Create nullifier accounts
     const null1_signer_seeds: [3][]const u8 = .{ "nullifier", &args.input_nullifier1, &null1_pda.bump_seed };
-    sol.system_program.createAccountCpi(.{
-        .from = signer_info,
-        .to = null1_info,
-        .lamports = null_lamports,
-        .space = null_space,
-        .owner = ctx.programId().*,
-        .seeds = &.{&null1_signer_seeds},
-    }) catch return error.CreateNullifierFailed;
-
-    // Create nullifier 2 PDA
     const null2_signer_seeds: [3][]const u8 = .{ "nullifier", &args.input_nullifier2, &null2_pda.bump_seed };
-    sol.system_program.createAccountCpi(.{
-        .from = signer_info,
-        .to = null2_info,
-        .lamports = null_lamports,
-        .space = null_space,
-        .owner = ctx.programId().*,
-        .seeds = &.{&null2_signer_seeds},
-    }) catch return error.CreateNullifierFailed;
+    
+    if (is_withdraw) {
+        const pool_vault_info = ctx.accounts().pool_vault.info();
+        const vault_bump_slice = [_]u8{vault_bump};
+        const vault_seeds = [_][]const u8{ "pool_vault", &vault_bump_slice };
+        
+        // Create nullifier 1 - paid by pool_vault PDA
+        sol.system_program.createAccountCpi(.{
+            .from = pool_vault_info,
+            .to = null1_info,
+            .lamports = null_lamports,
+            .space = null_space,
+            .owner = ctx.programId().*,
+            .seeds = &.{ &null1_signer_seeds, &vault_seeds },
+        }) catch return error.CreateNullifierFailed;
+
+        // Create nullifier 2 - paid by pool_vault PDA
+        sol.system_program.createAccountCpi(.{
+            .from = pool_vault_info,
+            .to = null2_info,
+            .lamports = null_lamports,
+            .space = null_space,
+            .owner = ctx.programId().*,
+            .seeds = &.{ &null2_signer_seeds, &vault_seeds },
+        }) catch return error.CreateNullifierFailed;
+    } else {
+        // Deposit: signer pays for nullifier accounts
+        sol.system_program.createAccountCpi(.{
+            .from = signer_info,
+            .to = null1_info,
+            .lamports = null_lamports,
+            .space = null_space,
+            .owner = ctx.programId().*,
+            .seeds = &.{&null1_signer_seeds},
+        }) catch return error.CreateNullifierFailed;
+
+        sol.system_program.createAccountCpi(.{
+            .from = signer_info,
+            .to = null2_info,
+            .lamports = null_lamports,
+            .space = null_space,
+            .owner = ctx.programId().*,
+            .seeds = &.{&null2_signer_seeds},
+        }) catch return error.CreateNullifierFailed;
+    }
 
     sol.log.log("Nullifiers created");
 
@@ -776,7 +820,8 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         sol.log.log("Deposit completed");
         
     } else if (args.public_amount < 0) {
-        // Withdrawal: pool_vault -> user via CPI with signer seeds
+        // Withdrawal: pool_vault -> recipient via CPI with signer seeds
+        // Reuse vault_bump computed earlier (saves CU!)
         const withdraw_amount: u64 = @intCast(-args.public_amount);
         
         // Calculate withdrawal fee
@@ -786,31 +831,14 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         const pool_vault_info = ctx.accounts().pool_vault.info();
         const recipient_info = ctx.accounts().recipient.info();
         
-        // Derive the bump by trying to match the pool_vault address
-        var bump: u8 = 255;
-        while (bump > 0) : (bump -= 1) {
-            const bump_slice = [_]u8{bump};
-            const seeds_with_bump = [_][]const u8{
-                "pool_vault",
-                &bump_slice,
-            };
-            const derived = sol.PublicKey.createProgramAddress(&seeds_with_bump, ctx.programId().*) catch continue;
-            if (std.mem.eql(u8, &derived.bytes, &pool_vault_info.id.bytes)) {
-                break;
-            }
-        }
-        
-        // Transfer net amount to RECIPIENT (not signer!) via CPI with signer seeds
-        const bump_slice = [_]u8{bump};
-        const transfer_seeds = [_][]const u8{
-            "pool_vault",
-            &bump_slice,
-        };
+        // Transfer net amount to RECIPIENT using pre-computed vault_bump
+        const bump_slice = [_]u8{vault_bump};
+        const transfer_seeds = [_][]const u8{ "pool_vault", &bump_slice };
         const signer_seeds = [_][]const []const u8{&transfer_seeds};
         
         sol.system_program.transferCpi(.{
             .from = pool_vault_info,
-            .to = recipient_info,  // Transfer to recipient, not signer!
+            .to = recipient_info,
             .lamports = net_amount,
             .seeds = &signer_seeds,
         }) catch return error.TransferFailed;

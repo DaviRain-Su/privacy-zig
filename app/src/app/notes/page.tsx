@@ -12,6 +12,7 @@ import {
   formatDate,
   Note 
 } from '@/lib/notes';
+import { buildExplorerTxUrl } from '@/lib/explorer';
 
 const WalletMultiButton = dynamic(
   () => import('@solana/wallet-adapter-react-ui').then(mod => mod.WalletMultiButton),
@@ -225,7 +226,7 @@ export default function NotesPage() {
                 <div className="mt-3 pt-3 border-t border-gray-800 flex gap-4 text-xs">
                   {note.depositTxSig && (
                     <a
-                      href={`https://explorer.solana.com/tx/${note.depositTxSig}?cluster=testnet`}
+                      href={buildExplorerTxUrl(note.depositTxSig)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-purple-400 hover:underline"
@@ -235,7 +236,7 @@ export default function NotesPage() {
                   )}
                   {note.withdrawTxSig && (
                     <a
-                      href={`https://explorer.solana.com/tx/${note.withdrawTxSig}?cluster=testnet`}
+                      href={buildExplorerTxUrl(note.withdrawTxSig)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-purple-400 hover:underline"

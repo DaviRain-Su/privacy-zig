@@ -20,7 +20,9 @@ import {
   MERKLE_TREE_HEIGHT,
   FIELD_SIZE,
   BN254_FIELD_MODULUS,
+  publicSignalToI64,
 } from '@/lib/privacy';
+import { buildExplorerTxUrl } from '@/lib/explorer';
 
 const WalletMultiButton = dynamic(
   () => import('@solana/wallet-adapter-react-ui').then(mod => mod.WalletMultiButton),
@@ -122,11 +124,15 @@ export default function TransferPage() {
       const solMintAddress = 1n;
       const recipientPubkey = new PublicKey(recipient);
       const utxoKeypair = generateKeypair();
-      const currentLeafIndex = await getCurrentLeafIndex(connection);
       
-      // Build empty tree for deposit
+      // Fetch current tree state for deposit root
+      const existingCommitments = await fetchCommitmentsFromChain(connection);
       const tree = new MerkleTree();
-      const emptyRoot = tree.zeros[MERKLE_TREE_HEIGHT];
+      for (const c of existingCommitments) {
+        tree.insert(c);
+      }
+      const currentLeafIndex = tree.leaves.length;
+      const depositRoot = tree.getRoot();
       
       // ========== DEPOSIT ==========
       setProgress({ step: 'deposit-proof', message: 'Generating deposit proof...' });
@@ -145,14 +151,14 @@ export default function TransferPage() {
       const outputCommitment1 = poseidonHash([BigInt(amountLamports), utxoKeypair.pubkey, outBlinding1, solMintAddress]);
       const outputCommitment2 = poseidonHash([0n, utxoKeypair.pubkey, outBlinding2, solMintAddress]);
       
-      const depositPublicAmount = new BN(amountLamports).add(FIELD_SIZE).mod(FIELD_SIZE);
+      const depositPublicAmountField = new BN(amountLamports).add(FIELD_SIZE).mod(FIELD_SIZE);
       const senderNum = BigInt('0x' + publicKey.toBuffer().toString('hex').slice(0, 16));
       const depositExtDataHash = poseidonHash([senderNum, BigInt(amountLamports)]);
       
       const zeroPath = new Array(MERKLE_TREE_HEIGHT).fill('0');
       const depositInput = {
-        root: emptyRoot.toString(),
-        publicAmount: depositPublicAmount.toString(),
+        root: depositRoot.toString(),
+        publicAmount: depositPublicAmountField.toString(),
         extDataHash: depositExtDataHash.toString(),
         mintAddress: solMintAddress.toString(),
         inputNullifier: [inputNullifier1.toString(), inputNullifier2.toString()],
@@ -180,13 +186,15 @@ export default function TransferPage() {
       depositPublicInputs[4].copy(depositData, offset); offset += 32;
       depositPublicInputs[5].copy(depositData, offset); offset += 32;
       depositPublicInputs[6].copy(depositData, offset); offset += 32;
-      depositData.writeBigInt64LE(BigInt(amountLamports), offset); offset += 8;
+      const depositPublicAmount = publicSignalToI64(depositProofResult.publicSignals[1]);
+      depositData.writeBigInt64LE(depositPublicAmount, offset); offset += 8;
       depositPublicInputs[2].copy(depositData, offset);
       
       const [depositNull1PDA] = PublicKey.findProgramAddressSync([Buffer.from('nullifier'), depositPublicInputs[3]], PROGRAM_ID);
       const [depositNull2PDA] = PublicKey.findProgramAddressSync([Buffer.from('nullifier'), depositPublicInputs[4]], PROGRAM_ID);
       const [poolVault] = PublicKey.findProgramAddressSync([Buffer.from('pool_vault')], PROGRAM_ID);
       
+      // 9 accounts: tree, null1, null2, config, vault, signer, recipient, fee_recipient, system
       const depositIx = new TransactionInstruction({
         keys: [
           { pubkey: POOL_CONFIG.treeAccount, isSigner: false, isWritable: true },
@@ -194,7 +202,8 @@ export default function TransferPage() {
           { pubkey: depositNull2PDA, isSigner: false, isWritable: true },
           { pubkey: POOL_CONFIG.globalConfig, isSigner: false, isWritable: false },
           { pubkey: poolVault, isSigner: false, isWritable: true },
-          { pubkey: publicKey, isSigner: true, isWritable: true },
+          { pubkey: publicKey, isSigner: true, isWritable: true },           // signer
+          { pubkey: publicKey, isSigner: false, isWritable: true },          // recipient (same for deposit)
           { pubkey: POOL_CONFIG.feeRecipient, isSigner: false, isWritable: true },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         ],
@@ -249,13 +258,13 @@ export default function TransferPage() {
       const withdrawOutputCommitment1 = poseidonHash([0n, utxoKeypair.pubkey, withdrawOutBlinding1, solMintAddress]);
       const withdrawOutputCommitment2 = poseidonHash([0n, utxoKeypair.pubkey, withdrawOutBlinding2, solMintAddress]);
       
-      const withdrawPublicAmount = new BN(amountLamports).neg().add(FIELD_SIZE).mod(FIELD_SIZE);
+      const withdrawPublicAmountField = new BN(amountLamports).neg().add(FIELD_SIZE).mod(FIELD_SIZE);
       const recipientNum = BigInt('0x' + recipientPubkey.toBuffer().slice(0, 8).toString('hex'));
       const withdrawExtDataHash = poseidonHash([recipientNum, BigInt(amountLamports)]);
       
       const withdrawInput = {
         root: withdrawRoot.toString(),
-        publicAmount: withdrawPublicAmount.toString(),
+        publicAmount: withdrawPublicAmountField.toString(),
         extDataHash: withdrawExtDataHash.toString(),
         mintAddress: solMintAddress.toString(),
         inputNullifier: [withdrawNullifier.toString(), withdrawDummyNullifier.toString()],
@@ -283,39 +292,34 @@ export default function TransferPage() {
       withdrawPublicInputs[4].copy(withdrawData, offset); offset += 32;
       withdrawPublicInputs[5].copy(withdrawData, offset); offset += 32;
       withdrawPublicInputs[6].copy(withdrawData, offset); offset += 32;
-      withdrawData.writeBigInt64LE(BigInt(-amountLamports), offset); offset += 8;
+      const withdrawPublicAmount = publicSignalToI64(withdrawProofResult.publicSignals[1]);
+      withdrawData.writeBigInt64LE(withdrawPublicAmount, offset); offset += 8;
       withdrawPublicInputs[2].copy(withdrawData, offset);
       
-      const [withdrawNull1PDA] = PublicKey.findProgramAddressSync([Buffer.from('nullifier'), withdrawPublicInputs[3]], PROGRAM_ID);
-      const [withdrawNull2PDA] = PublicKey.findProgramAddressSync([Buffer.from('nullifier'), withdrawPublicInputs[4]], PROGRAM_ID);
+      setProgress({ step: 'withdraw-tx', message: 'Sending via relayer for privacy...' });
       
-      const withdrawIx = new TransactionInstruction({
-        keys: [
-          { pubkey: POOL_CONFIG.treeAccount, isSigner: false, isWritable: true },
-          { pubkey: withdrawNull1PDA, isSigner: false, isWritable: true },
-          { pubkey: withdrawNull2PDA, isSigner: false, isWritable: true },
-          { pubkey: POOL_CONFIG.globalConfig, isSigner: false, isWritable: false },
-          { pubkey: poolVault, isSigner: false, isWritable: true },
-          { pubkey: publicKey, isSigner: true, isWritable: true },
-          { pubkey: recipientPubkey, isSigner: false, isWritable: true },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-        ],
-        programId: PROGRAM_ID,
-        data: withdrawData,
+      // Use relayer for withdraw - relayer signs so user address is hidden!
+      const RELAYER_URL = process.env.NEXT_PUBLIC_RELAYER_URL || 'http://localhost:3001';
+      
+      const relayResponse = await fetch(`${RELAYER_URL}/relay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instruction_data: Buffer.from(withdrawData).toString('base64'),
+          nullifier1: Buffer.from(withdrawPublicInputs[3]).toString('hex'),
+          nullifier2: Buffer.from(withdrawPublicInputs[4]).toString('hex'),
+          recipient: recipient,
+        }),
       });
       
-      setProgress({ step: 'withdraw-tx', message: 'Sending withdrawal transaction...' });
+      const relayResult = await relayResponse.json();
       
-      const withdrawTx = new Transaction()
-        .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }))
-        .add(withdrawIx);
+      if (!relayResult.success) {
+        throw new Error(relayResult.error || 'Relayer failed');
+      }
       
-      const { blockhash: withdrawBlockhash, lastValidBlockHeight: withdrawHeight } = await connection.getLatestBlockhash();
-      withdrawTx.recentBlockhash = withdrawBlockhash;
-      withdrawTx.feePayer = publicKey;
-      
-      const withdrawSig = await sendTransaction(withdrawTx, connection);
-      await connection.confirmTransaction({ signature: withdrawSig, blockhash: withdrawBlockhash, lastValidBlockHeight: withdrawHeight });
+      const withdrawSig = relayResult.signature;
+      await connection.confirmTransaction(withdrawSig, 'confirmed');
       
       setProgress({ step: 'done', message: 'Transfer complete!' });
       setResult({ depositSig, withdrawSig });
@@ -491,7 +495,7 @@ export default function TransferPage() {
 
             <div className="space-y-2 text-sm">
               <a
-                href={`https://explorer.solana.com/tx/${result.withdrawSig}?cluster=testnet`}
+                href={result.withdrawSig ? buildExplorerTxUrl(result.withdrawSig) : '#'}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="block text-purple-400 hover:underline"

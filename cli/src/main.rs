@@ -44,6 +44,10 @@ struct Cli {
     #[arg(short, long, default_value_t = default_artifacts_path())]
     artifacts: String,
 
+    /// Relayer URL for anonymous withdrawals
+    #[arg(long, default_value = "http://localhost:3001")]
+    relayer_url: String,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -169,10 +173,10 @@ async fn main() -> Result<()> {
             cmd_deposit(&client, &keypair, amount, &cli.artifacts, yes).await?
         }
         Commands::Withdraw { recipient, note_id, yes } => {
-            cmd_withdraw(&client, &keypair, &recipient, note_id, &cli.artifacts, yes).await?
+            cmd_withdraw(&client, &keypair, &recipient, note_id, &cli.artifacts, &cli.relayer_url, yes).await?
         }
         Commands::Transfer { amount, recipient, yes } => {
-            cmd_transfer(&client, &keypair, amount, &recipient, &cli.artifacts, yes).await?
+            cmd_transfer(&client, &keypair, amount, &recipient, &cli.artifacts, &cli.relayer_url, yes).await?
         }
         Commands::Notes { action } => cmd_notes(action).await?,
         Commands::Info => cmd_info(&client, &keypair).await?,
@@ -263,23 +267,26 @@ async fn cmd_deposit(
     
     let prover = PrivacyProver::new(&wasm_path, &zkey_path)?;
 
+    // Get current tree state from chain
+    pb.set_message("Fetching Merkle tree from chain...");
+    let config = PoolConfig::default();
+    let commitments = fetch_commitments_from_chain(client, &config)?;
+    
+    let mut tree = MerkleTree::new(MERKLE_TREE_HEIGHT);
+    for c in &commitments {
+        tree.insert(*c);
+    }
+    let root = tree.root();
+    let current_leaf_index = tree.leaves.len();
+
     // Generate UTXO
     pb.set_message("Generating UTXO...");
     let utxo = Utxo::new(lamports)?;
 
-    // Generate proof
+    // Generate proof with current on-chain root
     pb.set_message("Generating ZK proof (this takes ~30s)...");
     let payer_bytes: [u8; 32] = keypair.pubkey().to_bytes();
-    let proof_data = prover.prove_deposit(lamports, &utxo, &payer_bytes)?;
-
-    // Get current leaf index
-    let config = PoolConfig::default();
-    let tree_info = client.get_account_data(&config.tree_account)?;
-    let current_leaf_index = if tree_info.len() >= 48 {
-        u64::from_le_bytes(tree_info[40..48].try_into().unwrap()) as usize
-    } else {
-        0
-    };
+    let proof_data = prover.prove_deposit(lamports, &utxo, &payer_bytes, root)?;
 
     // Build transaction
     pb.set_message("Building transaction...");
@@ -364,10 +371,11 @@ async fn cmd_deposit(
 
 async fn cmd_withdraw(
     client: &RpcClient,
-    keypair: &Keypair,
+    _keypair: &Keypair,  // Not used anymore - relayer signs!
     recipient: &str,
     note_id: Option<String>,
     artifacts_path: &str,
+    relayer_url: &str,
     skip_confirm: bool,
 ) -> Result<()> {
     let recipient_pubkey = Pubkey::from_str(recipient)
@@ -406,11 +414,12 @@ async fn cmd_withdraw(
 
     let amount_sol = note.amount as f64 / 1_000_000_000.0;
 
-    println!("{}", style("📤 Withdraw").bold());
+    println!("{}", style("📤 Withdraw (via Relayer)").bold());
     println!("{}", style("─".repeat(40)).dim());
     println!("  Amount:     {} SOL", style(format!("{:.4}", amount_sol)).green());
     println!("  Recipient:  {}", style(recipient).cyan());
     println!("  Note ID:    {}", style(&note.id).dim());
+    println!("  Relayer:    {}", style(relayer_url).dim());
     println!();
 
     if !skip_confirm {
@@ -469,63 +478,47 @@ async fn cmd_withdraw(
     let recipient_bytes: [u8; 32] = recipient_pubkey.to_bytes();
     let proof_data = prover.prove_withdraw(&utxo, leaf_index, &tree, &recipient_bytes)?;
 
-    // Build transaction
-    pb.set_message("Building transaction...");
+    // Build instruction data for relayer
+    pb.set_message("Preparing relay request...");
     let instruction_data = proof_data.to_instruction_data();
 
-    let (nullifier1_pda, _) = Pubkey::find_program_address(
-        &[b"nullifier", &proof_data.nullifier1],
-        &config.program_id,
-    );
-    let (nullifier2_pda, _) = Pubkey::find_program_address(
-        &[b"nullifier", &proof_data.nullifier2],
-        &config.program_id,
-    );
+    // Send to relayer instead of submitting directly
+    pb.set_message("Sending to relayer...");
+    
+    let relay_request = serde_json::json!({
+        "instruction_data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &instruction_data),
+        "nullifier1": hex::encode(&proof_data.nullifier1),
+        "nullifier2": hex::encode(&proof_data.nullifier2),
+        "recipient": recipient,
+    });
 
-    // New account order for v2 program with separate recipient:
-    // 1. tree_account
-    // 2. nullifier1
-    // 3. nullifier2
-    // 4. global_config
-    // 5. pool_vault
-    // 6. signer (tx fee payer)
-    // 7. recipient (receives withdrawn SOL - can be different from signer!)
-    // 8. fee_recipient
-    // 9. system_program
-    let transact_ix = Instruction {
-        program_id: config.program_id,
-        accounts: vec![
-            AccountMeta::new(config.tree_account, false),
-            AccountMeta::new(nullifier1_pda, false),
-            AccountMeta::new(nullifier2_pda, false),
-            AccountMeta::new_readonly(config.global_config, false),
-            AccountMeta::new(config.pool_vault, false),
-            AccountMeta::new(keypair.pubkey(), true),           // signer
-            AccountMeta::new(recipient_pubkey, false),          // recipient (gets the SOL!)
-            AccountMeta::new(config.fee_recipient, false),      // fee_recipient
-            AccountMeta::new_readonly(system_program::id(), false),
-        ],
-        data: instruction_data,
-    };
+    let http_client = reqwest::Client::new();
+    let response = http_client
+        .post(format!("{}/relay", relayer_url))
+        .json(&relay_request)
+        .send()
+        .await
+        .map_err(|e| anyhow!("Failed to connect to relayer: {}", e))?;
 
-    let compute_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+    let relay_result: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| anyhow!("Invalid relayer response: {}", e))?;
 
-    let recent_blockhash = client.get_latest_blockhash()?;
-    let tx = Transaction::new_signed_with_payer(
-        &[compute_ix, transact_ix],
-        Some(&keypair.pubkey()),
-        &[keypair],
-        recent_blockhash,
-    );
+    if !relay_result["success"].as_bool().unwrap_or(false) {
+        let error = relay_result["error"].as_str().unwrap_or("Unknown error");
+        return Err(anyhow!("Relayer error: {}", error));
+    }
 
-    pb.set_message("Sending transaction...");
-    let signature = client.send_and_confirm_transaction(&tx)?;
+    let signature = relay_result["signature"]
+        .as_str()
+        .ok_or_else(|| anyhow!("No signature in relayer response"))?;
 
     pb.finish_with_message("Done!");
 
     // Update note status
     let mut store = NoteStore::load()?;
-    store.update_status(&note.id, "withdrawn", Some(&signature.to_string()))?;
+    store.update_status(&note.id, "withdrawn", Some(signature))?;
 
     println!();
     println!("{}", style("✅ Withdrawal successful!").green().bold());
@@ -533,7 +526,8 @@ async fn cmd_withdraw(
     println!("Recipient: {}", recipient);
     println!("Signature: {}", signature);
     println!();
-    println!("{}", style("🔐 No on-chain link between your deposit and this withdrawal!").cyan());
+    println!("{}", style("🔐 Your address is NOT visible in this transaction!").cyan());
+    println!("{}", style("   Only the relayer address appears on-chain.").dim());
     println!();
 
     Ok(())
@@ -545,19 +539,21 @@ async fn cmd_transfer(
     amount: f64,
     recipient: &str,
     artifacts_path: &str,
+    relayer_url: &str,
     skip_confirm: bool,
 ) -> Result<()> {
     let _recipient_pubkey = Pubkey::from_str(recipient)
         .map_err(|_| anyhow!("Invalid recipient address"))?;
 
-    println!("{}", style("⚡ Anonymous Transfer").bold());
+    println!("{}", style("⚡ Anonymous Transfer (via Relayer)").bold());
     println!("{}", style("─".repeat(40)).dim());
     println!("  Amount:     {} SOL", style(format!("{:.4}", amount)).green());
     println!("  Recipient:  {}", style(recipient).cyan());
     println!("  From:       {}", style(keypair.pubkey().to_string()).dim());
+    println!("  Relayer:    {}", style(relayer_url).dim());
     println!();
     println!("{}", style("  This will deposit and immediately withdraw to recipient.").dim());
-    println!("{}", style("  No on-chain link between you and recipient!").dim());
+    println!("{}", style("  Withdrawal uses relayer - your address stays hidden!").dim());
     println!();
 
     if !skip_confirm {
@@ -571,18 +567,20 @@ async fn cmd_transfer(
         }
     }
 
-    // Step 1: Deposit
+    // Step 1: Deposit (user signs this - deposit is public anyway)
     println!();
     println!("{}", style("Step 1/2: Depositing...").bold());
     cmd_deposit(client, keypair, amount, artifacts_path, true).await?;
 
     // Wait for transaction confirmation before querying tree
     println!("{}", style("Waiting for confirmation...").dim());
-    tokio::time::sleep(Duration::from_secs(10)).await;
+    // Wait longer for transaction to be indexed and commitment to appear in tree
+    // 30 seconds is needed for testnet to index the commitment
+    tokio::time::sleep(Duration::from_secs(30)).await;
 
-    // Step 2: Withdraw to recipient
+    // Step 2: Withdraw to recipient via relayer
     println!();
-    println!("{}", style("Step 2/2: Withdrawing to recipient...").bold());
+    println!("{}", style("Step 2/2: Withdrawing to recipient via relayer...").bold());
     
     // Get latest note
     let store = NoteStore::load()?;
@@ -599,6 +597,7 @@ async fn cmd_transfer(
         recipient,
         Some(latest_note.id.clone()),
         artifacts_path,
+        relayer_url,
         true,
     )
     .await?;
@@ -607,9 +606,9 @@ async fn cmd_transfer(
     println!("{}", style("✅ Anonymous transfer complete!").green().bold());
     println!();
     println!("{}", style("🔐 Privacy achieved:").cyan().bold());
+    println!("   • Deposit: your address visible (unavoidable)");
+    println!("   • Withdraw: only relayer address visible!");
     println!("   • No on-chain link between you and recipient");
-    println!("   • Transaction passed through ZK privacy pool");
-    println!("   • Recipient could be from any pool depositor");
     println!();
 
     Ok(())

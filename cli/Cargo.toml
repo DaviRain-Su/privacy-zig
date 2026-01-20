@@ -60,3 +60,7 @@ wasmer = "4.4"
 rand = "0.8"
 dirs = "5.0"
 chrono = "0.4"
+
+# HTTP client for relayer
+reqwest = { version = "0.12", features = ["json"] }
+base64 = "0.22"

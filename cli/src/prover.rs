@@ -15,12 +15,13 @@ use ark_relations::r1cs::ConstraintMatrices;
 use ark_std::rand::thread_rng;
 use ark_std::UniformRand;
 use num_bigint::BigInt;
+use num_traits::ToPrimitive;
 use std::collections::HashMap;
 use std::fs::File;
 use std::sync::Mutex;
 use wasmer::Store;
 
-use crate::crypto::{fr_to_be_bytes, MerkleTree, Utxo, MERKLE_TREE_HEIGHT};
+use crate::crypto::{fr_to_be_bytes, MerkleTree, Utxo, MERKLE_TREE_HEIGHT, FIELD_SIZE};
 
 /// BN254 base field modulus (for G1 point negation)
 const BN254_FIELD_MODULUS: &str =
@@ -50,15 +51,14 @@ impl PrivacyProver {
     }
 
     /// Generate proof for a deposit transaction
+    /// root should be the current on-chain Merkle tree root
     pub fn prove_deposit(
         &self,
         amount: u64,
         utxo: &Utxo,
         payer_pubkey_bytes: &[u8; 32],
+        root: Fr,
     ) -> Result<TransactProofData> {
-        // Build empty Merkle tree
-        let tree = MerkleTree::new(MERKLE_TREE_HEIGHT);
-        let root = tree.root();
 
         // Compute dummy nullifiers for fresh deposit
         let dummy_utxo1 = Utxo::new(0)?;
@@ -113,7 +113,7 @@ impl PrivacyProver {
 
         // Generate proof
         let (proof, public_signals) = self.generate_proof(inputs)?;
-        self.format_proof(&proof, &public_signals, amount as i64)
+        self.format_proof(&proof, &public_signals)
     }
 
     /// Generate proof for a withdrawal transaction
@@ -222,7 +222,7 @@ impl PrivacyProver {
         ]);
 
         let (proof, public_signals) = self.generate_proof(inputs)?;
-        self.format_proof(&proof, &public_signals, -(amount as i64))
+        self.format_proof(&proof, &public_signals)
     }
 
     /// Generate proof using witness calculator and arkworks
@@ -283,9 +283,9 @@ impl PrivacyProver {
         &self,
         proof: &Proof<Bn254>,
         public_signals: &[Fr],
-        public_amount: i64,
     ) -> Result<TransactProofData> {
         let modulus = num_bigint::BigUint::parse_bytes(BN254_FIELD_MODULUS.as_bytes(), 10).unwrap();
+        let public_amount = public_signal_to_i64(&public_signals[1])?;
 
         // Negate proof_a for pairing check
         let a_x = g1_x_to_biguint(&proof.a);
@@ -329,6 +329,21 @@ impl PrivacyProver {
             ext_data_hash,
         })
     }
+}
+
+fn public_signal_to_i64(signal: &Fr) -> Result<i64> {
+    let field = BigInt::parse_bytes(FIELD_SIZE.as_bytes(), 10)
+        .ok_or_else(|| anyhow!("Invalid FIELD_SIZE"))?;
+    let value = fr_to_bigint(signal);
+    let half_field = &field >> 1;
+    let signed = if value > half_field {
+        value - &field
+    } else {
+        value
+    };
+    signed
+        .to_i64()
+        .ok_or_else(|| anyhow!("public amount out of i64 range"))
 }
 
 /// Proof data formatted for on-chain transaction

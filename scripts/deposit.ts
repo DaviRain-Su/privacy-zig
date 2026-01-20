@@ -29,7 +29,8 @@ import * as crypto from 'crypto';
 // Constants
 // ============================================================================
 
-const PROGRAM_ID = new PublicKey('Dz82AAVPumnUys5SQ8HMat5iD6xiBVMGC2xJiJdZkpbT');
+// v2 Program with separate recipient account
+const PROGRAM_ID = new PublicKey('9A6fck3xNW2C6vwwqM4i1f4GeYpieuB7XKpF1YFduT6h');
 const MERKLE_TREE_HEIGHT = 26;
 const FIELD_SIZE = new BN('21888242871839275222246405745257275088548364400416034343698204186575808495617');
 const BN254_FIELD_MODULUS = BigInt('21888242871839275222246405745257275088696311157297823662689037894645226208583');
@@ -263,7 +264,8 @@ async function deposit(amountSol: number) {
     PROGRAM_ID
   );
   
-  // Build transaction
+  // Build transaction (v2 account order)
+  const feeRecipient = new PublicKey(config.feeRecipient || payer.publicKey.toBase58());
   const transactIx = new TransactionInstruction({
     keys: [
       { pubkey: new PublicKey(config.treeAccount), isSigner: false, isWritable: true },
@@ -271,8 +273,9 @@ async function deposit(amountSol: number) {
       { pubkey: nullifier2PDA, isSigner: false, isWritable: true },
       { pubkey: new PublicKey(config.globalConfig), isSigner: false, isWritable: false },
       { pubkey: poolVault, isSigner: false, isWritable: true },
-      { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: payer.publicKey, isSigner: false, isWritable: true }, // fee recipient
+      { pubkey: payer.publicKey, isSigner: true, isWritable: true },  // signer
+      { pubkey: payer.publicKey, isSigner: false, isWritable: true }, // recipient (same for deposit)
+      { pubkey: feeRecipient, isSigner: false, isWritable: true },    // fee recipient
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     programId: PROGRAM_ID,

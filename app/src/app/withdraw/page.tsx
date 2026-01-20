@@ -7,6 +7,7 @@ import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { withdraw } from '@/lib/privacy';
 import { getWithdrawableNotes, formatAmount, Note } from '@/lib/notes';
+import { buildExplorerTxUrl } from '@/lib/explorer';
 
 const WalletMultiButton = dynamic(
   () => import('@solana/wallet-adapter-react-ui').then(mod => mod.WalletMultiButton),
@@ -210,7 +211,7 @@ export default function WithdrawPage() {
             
             <div className="space-y-4">
               <a
-                href={`https://explorer.solana.com/tx/${result.signature}?cluster=testnet`}
+                href={result.signature ? buildExplorerTxUrl(result.signature) : '#'}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="block text-purple-400 hover:underline text-sm"
