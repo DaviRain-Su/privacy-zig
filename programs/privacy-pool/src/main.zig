@@ -277,9 +277,11 @@ pub const VERIFYING_KEY = struct {
 // Account Definitions
 // ============================================================================
 
+// For initialize, we use Mut instead of Account because the accounts
+// don't have discriminators yet (they're being created)
 const InitializeAccounts = struct {
-    tree_account: zero.Account(TreeAccount, .{ .writable = true }),
-    global_config: zero.Account(GlobalConfig, .{ .writable = true }),
+    tree_account: zero.Mut(TreeAccount),
+    global_config: zero.Mut(GlobalConfig),
     authority: zero.Signer(0),
 };
 
@@ -563,8 +565,20 @@ fn verifyGroth16Proof(
 // Instruction Handlers
 // ============================================================================
 
+// Account discriminators (from IDL)
+const TREE_ACCOUNT_DISCRIMINATOR: [8]u8 = .{ 214, 38, 107, 35, 76, 133, 73, 49 };
+const GLOBAL_CONFIG_DISCRIMINATOR: [8]u8 = .{ 149, 8, 156, 202, 160, 252, 176, 217 };
+
 fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
     const args = ctx.args(InitializeArgs);
+    
+    // Write discriminators first (accounts are fresh, discriminator is at offset 0)
+    const tree_data = ctx.accounts().tree_account.dataMut(8);
+    const config_data = ctx.accounts().global_config.dataMut(8);
+    tree_data.* = TREE_ACCOUNT_DISCRIMINATOR;
+    config_data.* = GLOBAL_CONFIG_DISCRIMINATOR;
+    
+    // Now access typed data (after discriminator)
     const tree = ctx.accounts().tree_account.getMut();
     const config = ctx.accounts().global_config.getMut();
 
@@ -590,9 +604,6 @@ fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
     config.fee_error_margin = 500;
 
     sol.log.log("Pool initialized");
-    
-    
-    
 }
 
 fn updateConfigHandler(ctx: zero.Ctx(UpdateConfigAccounts)) !void {

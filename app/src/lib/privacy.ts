@@ -9,7 +9,7 @@ import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import { buildPoseidon } from 'circomlibjs';
 
 // Program ID (update after deployment)
-export const PROGRAM_ID = new PublicKey('PrivZig111111111111111111111111111111111111');
+export const PROGRAM_ID = new PublicKey('Dz82AAVPumnUys5SQ8HMat5iD6xiBVMGC2xJiJdZkpbT');
 
 // Constants
 export const MERKLE_TREE_HEIGHT = 26;

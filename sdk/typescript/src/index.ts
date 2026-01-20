@@ -23,7 +23,7 @@ import idl from '../../programs/privacy-pool/idl/privacy_pool.json';
 export { idl };
 
 // Program ID
-export const PROGRAM_ID = new PublicKey('PrivZig111111111111111111111111111111111111');
+export const PROGRAM_ID = new PublicKey('Dz82AAVPumnUys5SQ8HMat5iD6xiBVMGC2xJiJdZkpbT');
 
 // Constants from IDL
 export const MERKLE_TREE_HEIGHT = 26;
