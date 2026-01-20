@@ -152,9 +152,25 @@ export default function NotesPage() {
         )}
 
         {/* Warning */}
-        <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-lg p-4 mb-6 text-sm text-yellow-300">
-          <p>⚠️ <strong>Important:</strong> Notes are stored only in your browser.</p>
-          <p className="mt-1">Clearing browser data will delete them. Use Export to backup!</p>
+        <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4 mb-6">
+          <div className="flex items-start gap-3">
+            <span className="text-2xl">⚠️</span>
+            <div>
+              <h3 className="font-semibold text-yellow-400 mb-2">Important: Backup Your Notes!</h3>
+              <p className="text-sm text-yellow-300/80 mb-3">
+                Notes are stored <strong>only in this browser</strong>. You will lose access to your funds if:
+              </p>
+              <ul className="text-sm text-yellow-300/70 space-y-1 mb-3">
+                <li>❌ You clear browser data / cookies</li>
+                <li>❌ You use incognito / private mode</li>
+                <li>❌ You switch to a different browser</li>
+                <li>❌ You use a different computer</li>
+              </ul>
+              <p className="text-sm text-yellow-400">
+                👉 Click <strong>Export</strong> to copy your backup, then save it somewhere safe!
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Notes List */}

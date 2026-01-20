@@ -153,7 +153,31 @@ export default function DepositPage() {
             <div className="text-6xl mb-6">✅</div>
             <h2 className="text-2xl font-bold mb-4">Deposit Successful!</h2>
             <p className="text-gray-400 mb-4">{amount} SOL deposited to privacy pool</p>
-            <p className="text-green-400 text-sm mb-8">Note saved to your browser automatically</p>
+            
+            {/* Important Warning */}
+            <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4 mb-6 text-left max-w-md mx-auto">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <h3 className="font-semibold text-yellow-400 mb-1">Backup Your Note!</h3>
+                  <p className="text-sm text-yellow-300/80 mb-2">
+                    Your note is saved in this browser only. You will <strong>lose your funds</strong> if:
+                  </p>
+                  <ul className="text-xs text-yellow-300/70 space-y-1 list-disc list-inside">
+                    <li>You clear browser data</li>
+                    <li>You use a different browser</li>
+                    <li>You use a different device</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <Link
+              href="/notes"
+              className="inline-block px-6 py-3 bg-yellow-600 hover:bg-yellow-700 rounded-lg font-semibold mb-4"
+            >
+              🔐 Backup Notes Now
+            </Link>
             
             <div className="space-y-4">
               <a
@@ -173,10 +197,10 @@ export default function DepositPage() {
                   Deposit More
                 </button>
                 <Link
-                  href="/notes"
+                  href="/withdraw"
                   className="px-6 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg"
                 >
-                  View Notes
+                  Withdraw
                 </Link>
               </div>
             </div>

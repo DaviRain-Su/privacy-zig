@@ -72,6 +72,31 @@ export default function Home() {
           </p>
         </div>
 
+        {/* Backup Reminder */}
+        {noteCount.withdrawable > 0 && (
+          <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-xl p-4 mb-8">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <p className="text-yellow-400 font-semibold">
+                    You have {noteCount.withdrawable} note{noteCount.withdrawable > 1 ? 's' : ''} worth funds
+                  </p>
+                  <p className="text-sm text-yellow-300/70">
+                    Make sure to backup your notes to avoid losing access
+                  </p>
+                </div>
+              </div>
+              <Link
+                href="/notes"
+                className="px-4 py-2 bg-yellow-600 hover:bg-yellow-700 rounded-lg text-sm font-semibold whitespace-nowrap"
+              >
+                Backup Now
+              </Link>
+            </div>
+          </div>
+        )}
+
         {/* Action Cards */}
         <div className="grid md:grid-cols-2 gap-6 mb-16">
           <Link 
