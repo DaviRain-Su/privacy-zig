@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
-import { WalletContextProvider } from '@/components/WalletProvider';
+import { WalletProvider } from '@/components/WalletProvider';
 
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Privacy-Zig | Anonymous Transfer on Solana',
-  description: 'Break the transaction graph. Send SOL anonymously to new addresses.',
+  title: 'Anonymous Transfer | Solana',
+  description: 'Send SOL privately with zero-knowledge proofs. No on-chain link between sender and recipient.',
 };
 
 export default function RootLayout({
@@ -17,10 +17,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={inter.className}>
-        <WalletContextProvider>
+      <body className={`${inter.className} bg-black text-white`}>
+        <WalletProvider>
           {children}
-        </WalletContextProvider>
+        </WalletProvider>
       </body>
     </html>
   );
