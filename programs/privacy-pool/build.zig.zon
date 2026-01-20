@@ -9,7 +9,8 @@
             .hash = "solana_program_sdk-0.17.1-wGj9UKENEgDSRjLiMbraFNwo5HZt9a9yxvrXWDIgn-Te",
         },
         .sol_anchor_zig = .{
-            .path = "../../../anchor-zig",
+            .url = "https://github.com/DaviRain-Su/anchor-zig/archive/refs/heads/main.tar.gz",
+            .hash = "sol_anchor_zig-0.1.0-xwtyYVQLBQATTym3HIO0xDRHFujOAVZI2ipwYjlB3SFq",
         },
     },
     .paths = .{
