@@ -47,6 +47,42 @@ Set the relayer URL in the app if needed:
 export NEXT_PUBLIC_RELAYER_URL=http://localhost:3001
 ```
 
+### CLI Usage
+
+```bash
+cd cli
+cargo run -- --help
+```
+
+Common commands:
+
+```bash
+# Pool stats
+cargo run -- stats
+
+# Deposit 0.1 SOL
+cargo run -- deposit --amount 0.1
+
+# Withdraw to a recipient
+cargo run -- withdraw --recipient <RECIPIENT_ADDRESS>
+
+# One-click anonymous transfer (deposit + relayed withdraw)
+cargo run -- transfer --amount 0.1 --recipient <RECIPIENT_ADDRESS>
+
+# List saved notes
+cargo run -- notes
+```
+
+You can override on-chain addresses via environment variables:
+
+```bash
+export PRIVACY_POOL_PROGRAM_ID=...
+export PRIVACY_POOL_TREE_ACCOUNT=...
+export PRIVACY_POOL_GLOBAL_CONFIG=...
+export PRIVACY_POOL_POOL_VAULT=...
+export PRIVACY_POOL_FEE_RECIPIENT=...
+```
+
 ### Build On-chain Program
 
 ```bash
