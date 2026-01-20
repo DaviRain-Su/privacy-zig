@@ -1,78 +1,126 @@
 'use client';
 
-import { useState, useCallback } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { useState, useEffect } from 'react';
+import { useConnection, useWallet } from '@solana/wallet-adapter-react';
+import { PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Header } from '@/components/Header';
-import { parseDepositNote, DepositNote } from '@/lib/privacy';
+import { 
+  prepareWithdraw, 
+  getNotesFromStorage, 
+  removeNoteFromStorage,
+  importNote,
+  getPoolStats,
+  DepositNote 
+} from '@/lib/privacy';
+
+type WithdrawStep = 'select' | 'input' | 'generating' | 'confirming' | 'success' | 'error';
 
 export default function WithdrawPage() {
-  const { publicKey, connected } = useWallet();
   const { connection } = useConnection();
+  const { publicKey, sendTransaction, connected } = useWallet();
   
-  const [noteInput, setNoteInput] = useState('');
-  const [recipientAddress, setRecipientAddress] = useState('');
-  const [parsedNote, setParsedNote] = useState<DepositNote | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isGeneratingProof, setIsGeneratingProof] = useState(false);
-  const [success, setSuccess] = useState(false);
-  const [txSignature, setTxSignature] = useState('');
+  const [step, setStep] = useState<WithdrawStep>('select');
+  const [notes, setNotes] = useState<DepositNote[]>([]);
+  const [selectedNote, setSelectedNote] = useState<DepositNote | null>(null);
+  const [recipient, setRecipient] = useState('');
+  const [importedNote, setImportedNote] = useState('');
+  const [signature, setSignature] = useState('');
   const [error, setError] = useState('');
+  const [poolStats, setPoolStats] = useState<{ totalDeposits: number; poolBalance: number } | null>(null);
 
-  const handleParseNote = useCallback(() => {
+  useEffect(() => {
+    setNotes(getNotesFromStorage());
+  }, []);
+
+  useEffect(() => {
+    async function fetchStats() {
+      try {
+        const stats = await getPoolStats(connection);
+        setPoolStats(stats);
+      } catch (e) {
+        console.error('Failed to fetch pool stats:', e);
+      }
+    }
+    fetchStats();
+  }, [connection]);
+
+  useEffect(() => {
+    if (publicKey) {
+      setRecipient(publicKey.toBase58());
+    }
+  }, [publicKey]);
+
+  const handleSelectNote = (note: DepositNote) => {
+    setSelectedNote(note);
+    setStep('input');
+  };
+
+  const handleImportNote = () => {
     try {
-      const note = parseDepositNote(noteInput.trim());
-      setParsedNote(note);
+      const note = importNote(importedNote);
+      setSelectedNote(note);
+      setStep('input');
+    } catch (e) {
+      setError('Invalid note format');
+    }
+  };
+
+  const handleWithdraw = async () => {
+    if (!publicKey || !connected || !selectedNote) {
+      setError('Please connect your wallet and select a note');
+      return;
+    }
+
+    let recipientPubkey: PublicKey;
+    try {
+      recipientPubkey = new PublicKey(recipient);
+    } catch {
+      setError('Invalid recipient address');
+      return;
+    }
+
+    try {
+      setStep('generating');
       setError('');
-    } catch (err) {
-      setError('Invalid note format. Please check and try again.');
-      setParsedNote(null);
-    }
-  }, [noteInput]);
 
-  const handleWithdraw = useCallback(async () => {
-    if (!parsedNote) {
-      setError('Please enter a valid note first');
-      return;
-    }
+      // Prepare withdraw transaction
+      const transaction = await prepareWithdraw(
+        connection,
+        selectedNote,
+        recipientPubkey,
+        publicKey
+      );
 
-    if (!recipientAddress) {
-      setError('Please enter a recipient address');
-      return;
-    }
+      setStep('confirming');
 
-    setIsLoading(true);
-    setIsGeneratingProof(true);
-    setError('');
+      // Get latest blockhash
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
 
-    try {
-      // Step 1: Generate ZK proof (this would use snarkjs in production)
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate proof generation
-      setIsGeneratingProof(false);
-
-      // Step 2: Build and send transaction
-      // In production, this would:
-      // 1. Rebuild Merkle tree from on-chain events
-      // 2. Get Merkle proof for the commitment
-      // 3. Generate Groth16 proof using snarkjs
-      // 4. Build transact instruction with publicAmount < 0
-      // 5. Send and confirm transaction
-
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate tx
-
-      // Simulate success
-      setTxSignature('5xYz...demo...signature');
-      setSuccess(true);
+      // Send transaction
+      const sig = await sendTransaction(transaction, connection);
       
-    } catch (err: any) {
-      setError(err.message || 'Withdrawal failed');
-    } finally {
-      setIsLoading(false);
-      setIsGeneratingProof(false);
-    }
-  }, [parsedNote, recipientAddress]);
+      // Confirm
+      await connection.confirmTransaction({
+        signature: sig,
+        blockhash,
+        lastValidBlockHeight,
+      });
 
-  const formatAmount = (lamports: string) => {
-    return (Number(lamports) / 1e9).toFixed(4);
+      setSignature(sig);
+      
+      // Remove used note from storage
+      removeNoteFromStorage(selectedNote.commitment);
+      setNotes(getNotesFromStorage());
+      
+      setStep('success');
+
+    } catch (e: any) {
+      console.error('Withdraw failed:', e);
+      setError(e.message || 'Withdrawal failed');
+      setStep('error');
+    }
   };
 
   return (
@@ -80,76 +128,159 @@ export default function WithdrawPage() {
       <Header />
       
       <div className="max-w-2xl mx-auto px-4 py-12">
-        <h1 className="text-3xl font-bold mb-2">Withdraw SOL</h1>
+        <h1 className="text-4xl font-bold mb-2">Withdraw SOL</h1>
         <p className="text-gray-400 mb-8">
-          Use your secret note to withdraw to any address. 
-          The ZK proof ensures no connection to the original deposit.
+          Use your secret note to withdraw SOL to any address anonymously.
         </p>
 
-        {!success ? (
-          <div className="space-y-6">
-            {/* Note Input */}
-            <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-800">
-              <label className="block text-sm font-medium mb-2">
-                🔑 Secret Note
-              </label>
-              <textarea
-                value={noteInput}
-                onChange={(e) => setNoteInput(e.target.value)}
-                placeholder="Paste your secret note here..."
-                className="w-full h-32 bg-gray-800 rounded-lg px-4 py-3 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-privacy-500 resize-none"
-              />
-              <button
-                onClick={handleParseNote}
-                className="mt-3 px-6 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors"
-              >
-                Parse Note
-              </button>
+        {/* Pool Stats */}
+        {poolStats && (
+          <div className="bg-gray-900/50 rounded-xl p-4 mb-8 border border-gray-800">
+            <div className="flex justify-between">
+              <div>
+                <div className="text-sm text-gray-400">Pool Balance</div>
+                <div className="text-xl font-semibold text-privacy-400">
+                  {poolStats.poolBalance.toFixed(4)} SOL
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-gray-400">Anonymity Set</div>
+                <div className="text-xl font-semibold">{poolStats.totalDeposits} deposits</div>
+              </div>
             </div>
+          </div>
+        )}
 
-            {/* Parsed Note Info */}
-            {parsedNote && (
-              <div className="bg-privacy-900/30 rounded-xl p-6 border border-privacy-800">
-                <h3 className="font-semibold mb-4 text-privacy-400">✓ Note Verified</h3>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Amount:</span>
-                    <span className="font-mono">{formatAmount(parsedNote.amount)} SOL</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Commitment:</span>
-                    <span className="font-mono text-xs">
-                      {parsedNote.commitment.slice(0, 16)}...
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-400">Deposited:</span>
-                    <span>{new Date(parsedNote.timestamp).toLocaleString()}</span>
-                  </div>
+        {step === 'select' && (
+          <div className="space-y-6">
+            {/* Saved Notes */}
+            {notes.length > 0 && (
+              <div>
+                <h3 className="text-lg font-semibold mb-3">Your Saved Notes</h3>
+                <div className="space-y-3">
+                  {notes.map((note, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => handleSelectNote(note)}
+                      className="w-full bg-gray-900/50 hover:bg-gray-800/50 border border-gray-700 hover:border-privacy-500 rounded-lg p-4 text-left transition-colors"
+                    >
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <div className="font-semibold">
+                            {(note.amount / LAMPORTS_PER_SOL).toFixed(4)} SOL
+                          </div>
+                          <div className="text-sm text-gray-400">
+                            Deposited {new Date(note.timestamp).toLocaleDateString()}
+                          </div>
+                        </div>
+                        <div className="text-privacy-400">→</div>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
 
-            {/* Recipient Address */}
-            <div className="bg-gray-900/50 rounded-xl p-6 border border-gray-800">
-              <label className="block text-sm font-medium mb-2">
-                📬 Recipient Address
-              </label>
+            {/* Import Note */}
+            <div>
+              <h3 className="text-lg font-semibold mb-3">
+                {notes.length > 0 ? 'Or Import a Note' : 'Import Your Note'}
+              </h3>
+              <textarea
+                value={importedNote}
+                onChange={(e) => setImportedNote(e.target.value)}
+                placeholder="Paste your encoded note here..."
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 font-mono text-sm h-32 focus:outline-none focus:border-privacy-500"
+              />
+              <button
+                onClick={handleImportNote}
+                disabled={!importedNote.trim()}
+                className="w-full mt-3 py-3 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-800/50 disabled:cursor-not-allowed rounded-lg font-medium transition-colors"
+              >
+                Import & Continue
+              </button>
+            </div>
+
+            {/* Error Message */}
+            {error && (
+              <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-4 text-red-200">
+                {error}
+              </div>
+            )}
+
+            {/* No Notes Warning */}
+            {notes.length === 0 && (
+              <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-lg p-4">
+                <div className="flex gap-3">
+                  <span className="text-xl">💡</span>
+                  <div>
+                    <div className="font-semibold text-yellow-200">No saved notes</div>
+                    <div className="text-sm text-yellow-200/80">
+                      If you made a deposit, paste your note above to withdraw. 
+                      Notes are also saved in browser storage after each deposit.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {step === 'input' && selectedNote && (
+          <div className="space-y-6">
+            {/* Selected Note Info */}
+            <div className="bg-privacy-900/30 border border-privacy-700/50 rounded-lg p-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <div className="text-sm text-gray-400">Amount to Withdraw</div>
+                  <div className="text-2xl font-bold text-privacy-400">
+                    {(selectedNote.amount / LAMPORTS_PER_SOL).toFixed(4)} SOL
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setSelectedNote(null);
+                    setStep('select');
+                  }}
+                  className="text-sm text-gray-400 hover:text-white"
+                >
+                  Change
+                </button>
+              </div>
+            </div>
+
+            {/* Recipient */}
+            <div>
+              <label className="block text-sm font-medium mb-2">Recipient Address</label>
               <input
                 type="text"
-                value={recipientAddress}
-                onChange={(e) => setRecipientAddress(e.target.value)}
+                value={recipient}
+                onChange={(e) => setRecipient(e.target.value)}
                 placeholder="Enter Solana address..."
-                className="w-full bg-gray-800 rounded-lg px-4 py-3 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-privacy-500"
+                className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-3 font-mono text-sm focus:outline-none focus:border-privacy-500"
               />
               <p className="text-sm text-gray-500 mt-2">
-                This can be any address - including a fresh wallet with no history.
+                💡 You can withdraw to ANY address. It doesn't need to be connected!
               </p>
             </div>
 
-            {/* Error */}
+            {/* Privacy Info */}
+            <div className="bg-green-900/30 border border-green-700/50 rounded-lg p-4">
+              <div className="flex gap-3">
+                <span className="text-xl">🔒</span>
+                <div>
+                  <div className="font-semibold text-green-200">Anonymous Withdrawal</div>
+                  <div className="text-sm text-green-200/80">
+                    ZK proof ensures NO on-chain link between your deposit and this withdrawal. 
+                    The recipient could be anyone who deposited to the pool.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Error Message */}
             {error && (
-              <div className="p-4 bg-red-900/30 border border-red-800 rounded-lg text-red-400">
+              <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-4 text-red-200">
                 {error}
               </div>
             )}
@@ -157,71 +288,91 @@ export default function WithdrawPage() {
             {/* Withdraw Button */}
             <button
               onClick={handleWithdraw}
-              disabled={!parsedNote || !recipientAddress || isLoading}
-              className={`w-full py-4 rounded-lg font-semibold text-lg transition-colors ${
-                parsedNote && recipientAddress && !isLoading
-                  ? 'bg-privacy-600 hover:bg-privacy-700 text-white'
-                  : 'bg-gray-700 text-gray-500 cursor-not-allowed'
-              }`}
+              disabled={!connected || !recipient}
+              className="w-full py-4 bg-privacy-600 hover:bg-privacy-700 disabled:bg-gray-700 disabled:cursor-not-allowed rounded-lg font-semibold text-lg transition-colors"
             >
-              {isLoading 
-                ? isGeneratingProof 
-                  ? '🔐 Generating ZK Proof...' 
-                  : '⏳ Sending Transaction...'
-                : `Withdraw ${parsedNote ? formatAmount(parsedNote.amount) : '0'} SOL`
-              }
+              {connected ? 'Withdraw Anonymously' : 'Connect Wallet First'}
             </button>
-
-            {/* Privacy Info */}
-            <div className="p-4 bg-gray-800/50 rounded-lg border border-gray-700">
-              <h4 className="font-medium mb-2">🛡️ Privacy Guarantee</h4>
-              <ul className="text-sm text-gray-400 space-y-1">
-                <li>• ZK proof reveals nothing about the original deposit</li>
-                <li>• Recipient address has no on-chain link to depositor</li>
-                <li>• Only the nullifier is published (prevents double-spend)</li>
-              </ul>
-            </div>
           </div>
-        ) : (
-          /* Success State */
-          <div className="bg-gray-900/50 rounded-xl p-6 border border-privacy-800 text-center">
-            <div className="text-6xl mb-4">🎉</div>
-            <h2 className="text-2xl font-bold text-privacy-400 mb-2">
-              Withdrawal Successful!
-            </h2>
-            <p className="text-gray-400 mb-6">
-              {formatAmount(parsedNote!.amount)} SOL sent to {recipientAddress.slice(0, 8)}...
-            </p>
+        )}
 
-            <div className="bg-gray-800 rounded-lg p-4 mb-6">
-              <div className="text-sm text-gray-400 mb-1">Transaction:</div>
+        {step === 'generating' && (
+          <div className="text-center py-12">
+            <div className="animate-spin w-16 h-16 border-4 border-privacy-500 border-t-transparent rounded-full mx-auto mb-6"></div>
+            <h2 className="text-2xl font-semibold mb-2">Generating ZK Proof</h2>
+            <p className="text-gray-400">Rebuilding Merkle tree and generating proof...</p>
+            <p className="text-sm text-gray-500 mt-2">This may take 30-60 seconds</p>
+          </div>
+        )}
+
+        {step === 'confirming' && (
+          <div className="text-center py-12">
+            <div className="animate-pulse w-16 h-16 bg-privacy-600 rounded-full mx-auto mb-6 flex items-center justify-center">
+              <span className="text-2xl">📝</span>
+            </div>
+            <h2 className="text-2xl font-semibold mb-2">Confirm Transaction</h2>
+            <p className="text-gray-400">Please confirm the transaction in your wallet</p>
+          </div>
+        )}
+
+        {step === 'success' && selectedNote && (
+          <div className="space-y-6">
+            <div className="bg-green-900/30 border border-green-700/50 rounded-lg p-6 text-center">
+              <div className="text-4xl mb-4">🎉</div>
+              <h2 className="text-2xl font-semibold mb-2">Withdrawal Successful!</h2>
+              <p className="text-gray-400 mb-2">
+                {(selectedNote.amount / LAMPORTS_PER_SOL).toFixed(4)} SOL sent anonymously to:
+              </p>
+              <p className="font-mono text-sm text-privacy-400 break-all">{recipient}</p>
               <a
-                href={`https://explorer.solana.com/tx/${txSignature}?cluster=devnet`}
+                href={`https://explorer.solana.com/tx/${signature}?cluster=testnet`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-privacy-400 hover:underline font-mono text-sm"
+                className="inline-block mt-4 text-privacy-400 hover:underline text-sm"
               >
-                {txSignature}
+                View on Explorer →
               </a>
             </div>
 
-            <div className="bg-privacy-900/30 rounded-lg p-4 border border-privacy-800">
-              <p className="text-privacy-400 text-sm">
-                ✓ The transaction graph has been broken! 
-                There is no on-chain link between the depositor and recipient.
-              </p>
+            <div className="bg-gray-900/50 rounded-lg p-6 border border-gray-800">
+              <h3 className="font-semibold mb-3">🔐 Privacy Achieved</h3>
+              <ul className="space-y-2 text-gray-400 text-sm">
+                <li>✓ No link between your deposit and this withdrawal on-chain</li>
+                <li>✓ Your note has been removed from local storage</li>
+                <li>✓ Recipient address has no traceable connection to the depositor</li>
+                <li>✓ Transaction could have come from any of {poolStats?.totalDeposits || 'many'} depositors</li>
+              </ul>
             </div>
 
             <button
               onClick={() => {
-                setSuccess(false);
-                setNoteInput('');
-                setRecipientAddress('');
-                setParsedNote(null);
+                setStep('select');
+                setSelectedNote(null);
+                setSignature('');
               }}
-              className="mt-6 px-6 py-3 bg-gray-700 hover:bg-gray-600 rounded-lg font-medium transition-colors"
+              className="w-full py-3 bg-gray-800 hover:bg-gray-700 rounded-lg font-medium transition-colors"
             >
               Make Another Withdrawal
+            </button>
+          </div>
+        )}
+
+        {step === 'error' && (
+          <div className="space-y-6">
+            <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-6 text-center">
+              <div className="text-4xl mb-4">❌</div>
+              <h2 className="text-2xl font-semibold mb-2">Withdrawal Failed</h2>
+              <p className="text-gray-400">{error}</p>
+            </div>
+
+            <button
+              onClick={() => {
+                setStep('input');
+                setError('');
+              }}
+              className="w-full py-3 bg-gray-800 hover:bg-gray-700 rounded-lg font-medium transition-colors"
+            >
+              Try Again
             </button>
           </div>
         )}

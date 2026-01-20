@@ -11,3 +11,5 @@ zig-out/
 Thumbs.db
 scripts/node_modules/
 scripts/note-*.json
+app/node_modules/
+app/.next/
