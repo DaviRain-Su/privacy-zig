@@ -314,8 +314,10 @@ const TransactAccounts = struct {
     global_config: zero.Account(GlobalConfig, .{}),
     /// Pool vault PDA that holds SOL
     pool_vault: zero.Mut(0),
-    /// User account (payer for deposits, or recipient for withdrawals)
-    user: zero.Signer(0),
+    /// Signer account (payer for tx fees and nullifier rent, can be relayer)
+    signer: zero.Signer(0),
+    /// Recipient account (for withdrawals) - does NOT need to sign!
+    recipient: zero.Mut(0),
     /// Fee recipient account
     fee_recipient: zero.Mut(0),
     /// System program for creating nullifier accounts
@@ -673,7 +675,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
     const args = ctx.args(TransactArgs);
     const tree = ctx.accounts().tree_account.getMut();
     const config = ctx.accounts().global_config.get();
-    const user_info = ctx.accounts().user.info();
+    const signer_info = ctx.accounts().signer.info();
     const null1_info = ctx.accounts().nullifier1.info();
     const null2_info = ctx.accounts().nullifier2.info();
 
@@ -693,7 +695,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
     
     const null1_signer_seeds: [3][]const u8 = .{ "nullifier", &args.input_nullifier1, &null1_pda.bump_seed };
     sol.system_program.createAccountCpi(.{
-        .from = user_info,
+        .from = signer_info,
         .to = null1_info,
         .lamports = null_lamports,
         .space = null_space,
@@ -704,7 +706,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
     // Create nullifier 2 PDA
     const null2_signer_seeds: [3][]const u8 = .{ "nullifier", &args.input_nullifier2, &null2_pda.bump_seed };
     sol.system_program.createAccountCpi(.{
-        .from = user_info,
+        .from = signer_info,
         .to = null2_info,
         .lamports = null_lamports,
         .space = null_space,
@@ -757,7 +759,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         
         // Transfer net amount to pool via CPI
         sol.system_program.transferCpi(.{
-            .from = user_info,
+            .from = signer_info,
             .to = ctx.accounts().pool_vault.info(),
             .lamports = net_amount,
         }) catch return error.TransferFailed;
@@ -765,7 +767,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         // Transfer fee to fee recipient via CPI
         if (fee > 0) {
             sol.system_program.transferCpi(.{
-                .from = user_info,
+                .from = signer_info,
                 .to = ctx.accounts().fee_recipient.info(),
                 .lamports = fee,
             }) catch return error.TransferFailed;
@@ -782,7 +784,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         const net_amount = withdraw_amount - fee;
         
         const pool_vault_info = ctx.accounts().pool_vault.info();
-        const user_info2 = ctx.accounts().user.info();
+        const recipient_info = ctx.accounts().recipient.info();
         
         // Derive the bump by trying to match the pool_vault address
         var bump: u8 = 255;
@@ -798,7 +800,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
             }
         }
         
-        // Transfer net amount to user via CPI with signer seeds
+        // Transfer net amount to RECIPIENT (not signer!) via CPI with signer seeds
         const bump_slice = [_]u8{bump};
         const transfer_seeds = [_][]const u8{
             "pool_vault",
@@ -808,7 +810,7 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         
         sol.system_program.transferCpi(.{
             .from = pool_vault_info,
-            .to = user_info2,
+            .to = recipient_info,  // Transfer to recipient, not signer!
             .lamports = net_amount,
             .seeds = &signer_seeds,
         }) catch return error.TransferFailed;

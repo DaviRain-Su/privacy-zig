@@ -295,6 +295,8 @@ async fn cmd_deposit(
         &config.program_id,
     );
 
+    // Account order for v2 program:
+    // For deposit: signer = depositor, recipient = depositor (doesn't matter for deposit)
     let transact_ix = Instruction {
         program_id: config.program_id,
         accounts: vec![
@@ -303,8 +305,9 @@ async fn cmd_deposit(
             AccountMeta::new(nullifier2_pda, false),
             AccountMeta::new_readonly(config.global_config, false),
             AccountMeta::new(config.pool_vault, false),
-            AccountMeta::new(keypair.pubkey(), true),
-            AccountMeta::new(keypair.pubkey(), false), // fee recipient
+            AccountMeta::new(keypair.pubkey(), true),       // signer (depositor)
+            AccountMeta::new(keypair.pubkey(), false),      // recipient (not used for deposit)
+            AccountMeta::new(config.fee_recipient, false),  // fee_recipient
             AccountMeta::new_readonly(system_program::id(), false),
         ],
         data: instruction_data,
@@ -479,6 +482,16 @@ async fn cmd_withdraw(
         &config.program_id,
     );
 
+    // New account order for v2 program with separate recipient:
+    // 1. tree_account
+    // 2. nullifier1
+    // 3. nullifier2
+    // 4. global_config
+    // 5. pool_vault
+    // 6. signer (tx fee payer)
+    // 7. recipient (receives withdrawn SOL - can be different from signer!)
+    // 8. fee_recipient
+    // 9. system_program
     let transact_ix = Instruction {
         program_id: config.program_id,
         accounts: vec![
@@ -487,8 +500,9 @@ async fn cmd_withdraw(
             AccountMeta::new(nullifier2_pda, false),
             AccountMeta::new_readonly(config.global_config, false),
             AccountMeta::new(config.pool_vault, false),
-            AccountMeta::new(keypair.pubkey(), true),
-            AccountMeta::new(recipient_pubkey, false),
+            AccountMeta::new(keypair.pubkey(), true),           // signer
+            AccountMeta::new(recipient_pubkey, false),          // recipient (gets the SOL!)
+            AccountMeta::new(config.fee_recipient, false),      // fee_recipient
             AccountMeta::new_readonly(system_program::id(), false),
         ],
         data: instruction_data,

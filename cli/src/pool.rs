@@ -1,8 +1,8 @@
 use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 
-/// Program ID for privacy-zig on testnet
-pub const PROGRAM_ID: &str = "Dz82AAVPumnUys5SQ8HMat5iD6xiBVMGC2xJiJdZkpbT";
+/// Program ID for privacy-zig v2 on testnet (with separate recipient account)
+pub const PROGRAM_ID: &str = "9A6fck3xNW2C6vwwqM4i1f4GeYpieuB7XKpF1YFduT6h";
 
 /// Pool configuration with all relevant addresses
 pub struct PoolConfig {
@@ -17,9 +17,9 @@ impl Default for PoolConfig {
     fn default() -> Self {
         Self {
             program_id: Pubkey::from_str(PROGRAM_ID).unwrap(),
-            tree_account: Pubkey::from_str("2h8oJdtfe9AE8r3Dmp49iBruUMfQQMmo6r63q79vxUN1").unwrap(),
-            global_config: Pubkey::from_str("9qQELDcp6Z48tLpsDs6RtSQbYx5GpquxB4staTKQz15i").unwrap(),
-            pool_vault: Pubkey::from_str("Cd6ntF7dtCqWiEnitLyukEVKN7VaCVkF1ta9VryP2zYq").unwrap(),
+            tree_account: Pubkey::from_str("4EGnTF2XfKDTBAszzoqQLe4zbmiURkWtkYQGnj99GiJf").unwrap(),
+            global_config: Pubkey::from_str("7RUeHfhA6L7BUrmt9ZK7SJ9rmTMkD8qjjJgHRrUEGMq9").unwrap(),
+            pool_vault: Pubkey::from_str("7nAKNHQwTeaybrnX6y3c3fLDL3qzQ3A6FGwMwH1LPc8q").unwrap(),
             fee_recipient: Pubkey::from_str("FM7WTd5Hr7ppp6vu3M4uAspF4DoRjrYPPFvAmqB7H95D").unwrap(),
         }
     }
