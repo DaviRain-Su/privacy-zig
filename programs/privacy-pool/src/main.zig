@@ -666,25 +666,47 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
 
     sol.log.log("Proof verified");
 
+    // Get global config for fee calculation
+    const config = ctx.accounts.global_config.get();
+
     // Handle SOL transfer based on public_amount
     // Direct lamport manipulation (no CPI needed for SOL transfers within program)
     if (args.public_amount > 0) {
         // Deposit: user -> pool_vault
         const deposit_amount: u64 = @intCast(args.public_amount);
+        
+        // Check deposit limit
+        if (deposit_amount > tree.max_deposit_amount) {
+            return error.DepositLimitExceeded;
+        }
+        
+        // Calculate deposit fee
+        const fee = (deposit_amount * config.deposit_fee_rate) / FEE_DENOMINATOR;
+        const net_amount = deposit_amount - fee;
+        
         try transferLamports(
             ctx.accounts.user.lamports(),
             ctx.accounts.pool_vault.lamports(),
-            deposit_amount,
+            net_amount,
         );
+        
+        // Fee stays with user (not transferred) - simplified fee model
         sol.log.log("Deposit completed");
     } else if (args.public_amount < 0) {
         // Withdrawal: pool_vault -> user
         const withdraw_amount: u64 = @intCast(-args.public_amount);
+        
+        // Calculate withdrawal fee
+        const fee = (withdraw_amount * config.withdrawal_fee_rate) / FEE_DENOMINATOR;
+        const net_amount = withdraw_amount - fee;
+        
         try transferLamports(
             ctx.accounts.pool_vault.lamports(),
             ctx.accounts.user.lamports(),
-            withdraw_amount,
+            net_amount,
         );
+        
+        // Fee stays in pool - simplified fee model
         sol.log.log("Withdrawal completed");
     }
     // If public_amount == 0, it's a private transfer (no SOL movement)
@@ -731,20 +753,37 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
 
     sol.log.log("Proof verified");
 
+    // Get global config for fee calculation
+    const config = ctx.accounts.global_config.get();
+
     // Handle SPL Token transfer via CPI
     if (args.public_amount > 0) {
         // Deposit: user_token_account -> vault_token_account
         const deposit_amount: u64 = @intCast(args.public_amount);
+        
+        // Check deposit limit
+        if (deposit_amount > tree.max_deposit_amount) {
+            return error.DepositLimitExceeded;
+        }
+        
+        // Calculate deposit fee
+        const fee = (deposit_amount * config.deposit_fee_rate) / FEE_DENOMINATOR;
+        const net_amount = deposit_amount - fee;
+        
         try transferTokensCpi(
             ctx.accounts.user_token_account.info(),
             ctx.accounts.vault_token_account.info(),
             ctx.accounts.user.info(),
-            deposit_amount,
+            net_amount,
         );
         sol.log.log("Token deposit completed");
     } else if (args.public_amount < 0) {
         // Withdrawal: vault_token_account -> user_token_account
         const withdraw_amount: u64 = @intCast(-args.public_amount);
+        
+        // Calculate withdrawal fee
+        const fee = (withdraw_amount * config.withdrawal_fee_rate) / FEE_DENOMINATOR;
+        const net_amount = withdraw_amount - fee;
         
         // PDA seeds for vault authority: ["vault_authority", tree_account_key]
         const tree_key = ctx.accounts.tree_account.id();
@@ -757,9 +796,10 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
             ctx.accounts.vault_token_account.info(),
             ctx.accounts.user_token_account.info(),
             ctx.accounts.vault_authority.info(),
-            withdraw_amount,
+            net_amount,
             &seeds,
         );
+        // Fee stays in vault - simplified fee model
         sol.log.log("Token withdrawal completed");
     }
 
