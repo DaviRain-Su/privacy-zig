@@ -93,6 +93,7 @@ export default function NotesPage() {
           </Link>
           <div className="flex items-center gap-4">
             <nav className="flex gap-4 text-sm">
+              <Link href="/transfer" className="text-gray-400 hover:text-white">Transfer</Link>
               <Link href="/deposit" className="text-gray-400 hover:text-white">Deposit</Link>
               <Link href="/withdraw" className="text-gray-400 hover:text-white">Withdraw</Link>
               <Link href="/notes" className="text-purple-400">Notes</Link>

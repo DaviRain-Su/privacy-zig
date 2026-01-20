@@ -76,6 +76,7 @@ export default function DepositPage() {
           </Link>
           <div className="flex items-center gap-4">
             <nav className="flex gap-4 text-sm">
+              <Link href="/transfer" className="text-gray-400 hover:text-white">Transfer</Link>
               <Link href="/deposit" className="text-purple-400">Deposit</Link>
               <Link href="/withdraw" className="text-gray-400 hover:text-white">Withdraw</Link>
               <Link href="/notes" className="text-gray-400 hover:text-white">Notes</Link>

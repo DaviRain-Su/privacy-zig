@@ -51,6 +51,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-4">
             <nav className="flex gap-4 text-sm">
+              <Link href="/transfer" className="text-gray-400 hover:text-white">Transfer</Link>
               <Link href="/deposit" className="text-gray-400 hover:text-white">Deposit</Link>
               <Link href="/withdraw" className="text-gray-400 hover:text-white">Withdraw</Link>
               <Link href="/notes" className="text-gray-400 hover:text-white">Notes</Link>
@@ -98,13 +99,30 @@ export default function Home() {
         )}
 
         {/* Action Cards */}
-        <div className="grid md:grid-cols-2 gap-6 mb-16">
+        <div className="grid md:grid-cols-3 gap-6 mb-16">
+          {/* One-Click Transfer - Featured */}
+          <Link 
+            href="/transfer"
+            className="md:col-span-3 bg-gradient-to-br from-purple-900/50 to-pink-900/30 rounded-2xl p-8 border border-purple-500/50 hover:border-purple-400 transition-colors group"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-4xl mb-4">⚡</div>
+                <h2 className="text-2xl font-bold mb-2 group-hover:text-purple-400">Anonymous Transfer</h2>
+                <p className="text-gray-400">
+                  Send SOL privately in one click. No notes to manage - deposit and withdraw automatically.
+                </p>
+              </div>
+              <div className="text-6xl opacity-50 group-hover:opacity-100 transition-opacity">→</div>
+            </div>
+          </Link>
+
           <Link 
             href="/deposit"
-            className="bg-gradient-to-br from-purple-900/50 to-purple-800/30 rounded-2xl p-8 border border-purple-700/50 hover:border-purple-500 transition-colors group"
+            className="bg-gradient-to-br from-blue-900/50 to-blue-800/30 rounded-2xl p-8 border border-blue-700/50 hover:border-blue-500 transition-colors group"
           >
             <div className="text-4xl mb-4">📥</div>
-            <h2 className="text-2xl font-bold mb-2 group-hover:text-purple-400">Deposit</h2>
+            <h2 className="text-2xl font-bold mb-2 group-hover:text-blue-400">Deposit</h2>
             <p className="text-gray-400">
               Deposit SOL to the privacy pool. A private note will be saved to your browser.
             </p>
@@ -122,6 +140,22 @@ export default function Home() {
             {noteCount.withdrawable > 0 && (
               <div className="mt-4 inline-block px-3 py-1 bg-green-900/50 rounded-full text-sm text-green-400">
                 {noteCount.withdrawable} note{noteCount.withdrawable > 1 ? 's' : ''} available
+              </div>
+            )}
+          </Link>
+
+          <Link 
+            href="/notes"
+            className="bg-gradient-to-br from-gray-900/50 to-gray-800/30 rounded-2xl p-8 border border-gray-700/50 hover:border-gray-500 transition-colors group"
+          >
+            <div className="text-4xl mb-4">📝</div>
+            <h2 className="text-2xl font-bold mb-2 group-hover:text-gray-300">My Notes</h2>
+            <p className="text-gray-400">
+              View and manage your private notes. Export for backup.
+            </p>
+            {noteCount.total > 0 && (
+              <div className="mt-4 inline-block px-3 py-1 bg-gray-800 rounded-full text-sm text-gray-400">
+                {noteCount.total} note{noteCount.total > 1 ? 's' : ''}
               </div>
             )}
           </Link>
