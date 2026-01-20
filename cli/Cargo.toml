@@ -13,6 +13,7 @@ path = "src/main.rs"
 # Solana
 solana-sdk = "2.0"
 solana-client = "2.0"
+solana-transaction-status = "2.0"
 
 # CLI
 clap = { version = "4.4", features = ["derive"] }
@@ -20,18 +21,30 @@ dialoguer = "0.11"
 indicatif = "0.17"
 console = "0.15"
 
-# Crypto
-ark-bn254 = "0.4"
-ark-ff = "0.4"
-ark-serialize = "0.4"
-ark-groth16 = "0.4"
-light-poseidon = "0.2"
+# ZK proofs - arkworks + circom compatibility
+ark-circom = "0.5"
+ark-bn254 = "0.5"
+ark-ec = "0.5"
+ark-ff = "0.5"
+ark-groth16 = "0.5"
+ark-relations = "0.5"
+ark-serialize = "0.5"
+ark-std = "0.5"
+ark-crypto-primitives = { version = "0.5", features = ["snark"] }
+
+# Poseidon hash
+light-poseidon = "0.4"
+
+# BigInt
+num-bigint = "0.4"
+num-traits = "0.2"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 bs58 = "0.5"
 hex = "0.4"
+byteorder = "1.5"
 
 # Async
 tokio = { version = "1.35", features = ["full"] }
@@ -40,6 +53,10 @@ tokio = { version = "1.35", features = ["full"] }
 anyhow = "1.0"
 thiserror = "1.0"
 
+# WASM runtime for witness calculation
+wasmer = "4.4"
+
 # Utils
 rand = "0.8"
 dirs = "5.0"
+chrono = "0.4"

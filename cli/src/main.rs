@@ -1,22 +1,30 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use console::style;
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Select};
 use indicatif::{ProgressBar, ProgressStyle};
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
+    compute_budget::ComputeBudgetInstruction,
+    instruction::{AccountMeta, Instruction},
     pubkey::Pubkey,
     signature::{read_keypair_file, Keypair, Signer},
+    system_program,
+    transaction::Transaction,
 };
 use std::str::FromStr;
 use std::time::Duration;
 
+mod crypto;
 mod notes;
 mod pool;
+mod prover;
 
+use crypto::{MerkleTree, Utxo, MERKLE_TREE_HEIGHT};
 use notes::{Note, NoteStore};
 use pool::{PoolConfig, PROGRAM_ID};
+use prover::PrivacyProver;
 
 #[derive(Parser)]
 #[command(name = "privacy")]
@@ -31,6 +39,10 @@ struct Cli {
     /// Path to keypair file
     #[arg(short, long, default_value_t = default_keypair_path())]
     keypair: String,
+
+    /// Path to circuit artifacts directory
+    #[arg(short, long, default_value_t = default_artifacts_path())]
+    artifacts: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -107,31 +119,48 @@ fn default_keypair_path() -> String {
         .unwrap_or_else(|| "~/.config/solana/id.json".to_string())
 }
 
+fn default_artifacts_path() -> String {
+    // Try to find artifacts relative to crate or in common locations
+    let locations = [
+        "../artifacts",
+        "../../privacy-zig/artifacts",
+        "./artifacts",
+    ];
+    
+    for loc in locations {
+        let path = std::path::Path::new(loc);
+        if path.exists() && path.join("transaction2.wasm").exists() {
+            return loc.to_string();
+        }
+    }
+    
+    "../artifacts".to_string()
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Print banner
     print_banner();
 
-    // Connect to RPC
     let client = RpcClient::new_with_commitment(
         cli.rpc_url.clone(),
         CommitmentConfig::confirmed(),
     );
 
-    // Load keypair
     let keypair = read_keypair_file(&cli.keypair)
         .map_err(|e| anyhow!("Failed to read keypair from {}: {}", cli.keypair, e))?;
 
     match cli.command {
         Commands::Stats => cmd_stats(&client).await?,
-        Commands::Deposit { amount } => cmd_deposit(&client, &keypair, amount).await?,
+        Commands::Deposit { amount } => {
+            cmd_deposit(&client, &keypair, amount, &cli.artifacts).await?
+        }
         Commands::Withdraw { recipient, note_id } => {
-            cmd_withdraw(&client, &keypair, &recipient, note_id).await?
+            cmd_withdraw(&client, &keypair, &recipient, note_id, &cli.artifacts).await?
         }
         Commands::Transfer { amount, recipient } => {
-            cmd_transfer(&client, &keypair, amount, &recipient).await?
+            cmd_transfer(&client, &keypair, amount, &recipient, &cli.artifacts).await?
         }
         Commands::Notes { action } => cmd_notes(action).await?,
         Commands::Info => cmd_info(&client, &keypair).await?,
@@ -142,14 +171,8 @@ async fn main() -> Result<()> {
 
 fn print_banner() {
     println!();
-    println!(
-        "{}",
-        style("  🔒 privacy-zig CLI").bold().cyan()
-    );
-    println!(
-        "{}",
-        style("  Anonymous SOL transfers on Solana").dim()
-    );
+    println!("{}", style("  🔒 privacy-zig CLI").bold().cyan());
+    println!("{}", style("  Anonymous SOL transfers on Solana").dim());
     println!();
 }
 
@@ -159,11 +182,9 @@ async fn cmd_stats(client: &RpcClient) -> Result<()> {
 
     let config = PoolConfig::default();
 
-    // Get pool vault balance
     let vault_balance = client.get_balance(&config.pool_vault)?;
     let vault_sol = vault_balance as f64 / 1_000_000_000.0;
 
-    // Get tree info
     let tree_data = client.get_account_data(&config.tree_account)?;
     let leaf_index = if tree_data.len() >= 48 {
         u64::from_le_bytes(tree_data[40..48].try_into().unwrap())
@@ -179,7 +200,12 @@ async fn cmd_stats(client: &RpcClient) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_deposit(client: &RpcClient, keypair: &Keypair, amount: f64) -> Result<()> {
+async fn cmd_deposit(
+    client: &RpcClient,
+    keypair: &Keypair,
+    amount: f64,
+    artifacts_path: &str,
+) -> Result<()> {
     let lamports = (amount * 1_000_000_000.0) as u64;
 
     println!("{}", style("📥 Deposit").bold());
@@ -198,7 +224,6 @@ async fn cmd_deposit(client: &RpcClient, keypair: &Keypair, amount: f64) -> Resu
         ));
     }
 
-    // Confirm
     if !Confirm::new()
         .with_prompt("Proceed with deposit?")
         .default(true)
@@ -214,30 +239,106 @@ async fn cmd_deposit(client: &RpcClient, keypair: &Keypair, amount: f64) -> Resu
             .template("{spinner:.green} {msg}")
             .unwrap(),
     );
-
-    pb.set_message("Generating ZK proof...");
     pb.enable_steady_tick(Duration::from_millis(100));
 
-    // TODO: Implement actual deposit logic
-    // For now, show placeholder
-    std::thread::sleep(Duration::from_secs(2));
+    // Load prover
+    pb.set_message("Loading circuit...");
+    let wasm_path = format!("{}/transaction2.wasm", artifacts_path);
+    let zkey_path = format!("{}/transaction2.zkey", artifacts_path);
+    
+    let prover = PrivacyProver::new(&wasm_path, &zkey_path)?;
 
+    // Generate UTXO
+    pb.set_message("Generating UTXO...");
+    let utxo = Utxo::new(lamports)?;
+
+    // Generate proof
+    pb.set_message("Generating ZK proof (this takes ~30s)...");
+    let payer_bytes: [u8; 32] = keypair.pubkey().to_bytes();
+    let proof_data = prover.prove_deposit(lamports, &utxo, &payer_bytes)?;
+
+    // Get current leaf index
+    let config = PoolConfig::default();
+    let tree_info = client.get_account_data(&config.tree_account)?;
+    let current_leaf_index = if tree_info.len() >= 48 {
+        u64::from_le_bytes(tree_info[40..48].try_into().unwrap()) as usize
+    } else {
+        0
+    };
+
+    // Build transaction
+    pb.set_message("Building transaction...");
+    let instruction_data = proof_data.to_instruction_data();
+
+    // Derive nullifier PDAs
+    let (nullifier1_pda, _) = Pubkey::find_program_address(
+        &[b"nullifier", &proof_data.nullifier1],
+        &config.program_id,
+    );
+    let (nullifier2_pda, _) = Pubkey::find_program_address(
+        &[b"nullifier", &proof_data.nullifier2],
+        &config.program_id,
+    );
+
+    let transact_ix = Instruction {
+        program_id: config.program_id,
+        accounts: vec![
+            AccountMeta::new(config.tree_account, false),
+            AccountMeta::new(nullifier1_pda, false),
+            AccountMeta::new(nullifier2_pda, false),
+            AccountMeta::new_readonly(config.global_config, false),
+            AccountMeta::new(config.pool_vault, false),
+            AccountMeta::new(keypair.pubkey(), true),
+            AccountMeta::new(keypair.pubkey(), false), // fee recipient
+            AccountMeta::new_readonly(system_program::id(), false),
+        ],
+        data: instruction_data,
+    };
+
+    let compute_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+
+    let recent_blockhash = client.get_latest_blockhash()?;
+    let tx = Transaction::new_signed_with_payer(
+        &[compute_ix, transact_ix],
+        Some(&keypair.pubkey()),
+        &[keypair],
+        recent_blockhash,
+    );
+
+    // Send transaction
     pb.set_message("Sending transaction...");
-    std::thread::sleep(Duration::from_secs(1));
+    let signature = client.send_and_confirm_transaction(&tx)?;
 
     pb.finish_with_message("Done!");
 
     println!();
     println!("{}", style("✅ Deposit successful!").green().bold());
+    println!("Signature: {}", signature);
+    println!(
+        "Explorer: https://explorer.solana.com/tx/{}?cluster=testnet",
+        signature
+    );
+
+    // Save note
+    let mut store = NoteStore::load()?;
+    let note = Note {
+        id: notes::generate_note_id(),
+        amount: lamports,
+        privkey: utxo.privkey,
+        pubkey: utxo.pubkey,
+        blinding: utxo.blinding,
+        commitment: utxo.commitment,
+        leaf_index: current_leaf_index as i64,
+        status: "deposited".to_string(),
+        created_at: chrono::Utc::now().timestamp() as u64,
+        deposit_tx_sig: Some(signature.to_string()),
+        withdraw_tx_sig: None,
+    };
+    store.add(note)?;
+
     println!();
-    println!(
-        "{}",
-        style("⚠️  Note saved to ~/.privacy-zig/notes.json").yellow()
-    );
-    println!(
-        "{}",
-        style("   Make sure to backup your notes!").yellow()
-    );
+    println!("{}", style("⚠️  Note saved to ~/.privacy-zig/notes.json").yellow());
+    println!("{}", style("   Make sure to backup your notes!").yellow());
     println!();
 
     Ok(())
@@ -248,12 +349,11 @@ async fn cmd_withdraw(
     keypair: &Keypair,
     recipient: &str,
     note_id: Option<String>,
+    artifacts_path: &str,
 ) -> Result<()> {
-    // Validate recipient
     let recipient_pubkey = Pubkey::from_str(recipient)
         .map_err(|_| anyhow!("Invalid recipient address"))?;
 
-    // Load notes
     let store = NoteStore::load()?;
     let available_notes: Vec<_> = store.notes.iter().filter(|n| n.status == "deposited").collect();
 
@@ -263,7 +363,6 @@ async fn cmd_withdraw(
         return Ok(());
     }
 
-    // Select note
     let note = if let Some(id) = note_id {
         available_notes
             .iter()
@@ -307,26 +406,99 @@ async fn cmd_withdraw(
             .template("{spinner:.green} {msg}")
             .unwrap(),
     );
-
-    pb.set_message("Fetching Merkle tree...");
     pb.enable_steady_tick(Duration::from_millis(100));
-    std::thread::sleep(Duration::from_secs(1));
 
-    pb.set_message("Generating ZK proof...");
-    std::thread::sleep(Duration::from_secs(2));
+    // Load prover
+    pb.set_message("Loading circuit...");
+    let wasm_path = format!("{}/transaction2.wasm", artifacts_path);
+    let zkey_path = format!("{}/transaction2.zkey", artifacts_path);
+    let prover = PrivacyProver::new(&wasm_path, &zkey_path)?;
+
+    // Reconstruct UTXO from note
+    let utxo = Utxo::from_values(
+        note.amount,
+        &note.privkey,
+        &note.pubkey,
+        &note.blinding,
+    )?;
+
+    // Fetch commitments and rebuild tree
+    pb.set_message("Fetching Merkle tree from chain...");
+    let config = PoolConfig::default();
+    let commitments = fetch_commitments_from_chain(client, &config)?;
+
+    let mut tree = MerkleTree::new(MERKLE_TREE_HEIGHT);
+    for c in &commitments {
+        tree.insert(*c);
+    }
+
+    // Find our commitment in tree
+    let commitment_fr = crypto::str_to_fr(&note.commitment)?;
+    let leaf_index = tree
+        .leaves
+        .iter()
+        .position(|&l| l == commitment_fr)
+        .ok_or_else(|| anyhow!("Commitment not found in tree"))?;
+
+    // Generate proof
+    pb.set_message("Generating ZK proof (this takes ~30s)...");
+    let recipient_bytes: [u8; 32] = recipient_pubkey.to_bytes();
+    let proof_data = prover.prove_withdraw(&utxo, leaf_index, &tree, &recipient_bytes)?;
+
+    // Build transaction
+    pb.set_message("Building transaction...");
+    let instruction_data = proof_data.to_instruction_data();
+
+    let (nullifier1_pda, _) = Pubkey::find_program_address(
+        &[b"nullifier", &proof_data.nullifier1],
+        &config.program_id,
+    );
+    let (nullifier2_pda, _) = Pubkey::find_program_address(
+        &[b"nullifier", &proof_data.nullifier2],
+        &config.program_id,
+    );
+
+    let transact_ix = Instruction {
+        program_id: config.program_id,
+        accounts: vec![
+            AccountMeta::new(config.tree_account, false),
+            AccountMeta::new(nullifier1_pda, false),
+            AccountMeta::new(nullifier2_pda, false),
+            AccountMeta::new_readonly(config.global_config, false),
+            AccountMeta::new(config.pool_vault, false),
+            AccountMeta::new(keypair.pubkey(), true),
+            AccountMeta::new(recipient_pubkey, false),
+            AccountMeta::new_readonly(system_program::id(), false),
+        ],
+        data: instruction_data,
+    };
+
+    let compute_ix = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+
+    let recent_blockhash = client.get_latest_blockhash()?;
+    let tx = Transaction::new_signed_with_payer(
+        &[compute_ix, transact_ix],
+        Some(&keypair.pubkey()),
+        &[keypair],
+        recent_blockhash,
+    );
 
     pb.set_message("Sending transaction...");
-    std::thread::sleep(Duration::from_secs(1));
+    let signature = client.send_and_confirm_transaction(&tx)?;
 
     pb.finish_with_message("Done!");
 
+    // Update note status
+    let mut store = NoteStore::load()?;
+    store.update_status(&note.id, "withdrawn", Some(&signature.to_string()))?;
+
     println!();
     println!("{}", style("✅ Withdrawal successful!").green().bold());
+    println!("Amount: {} SOL", amount_sol);
+    println!("Recipient: {}", recipient);
+    println!("Signature: {}", signature);
     println!();
-    println!(
-        "{}",
-        style("🔐 No on-chain link between your deposit and this withdrawal!").cyan()
-    );
+    println!("{}", style("🔐 No on-chain link between your deposit and this withdrawal!").cyan());
     println!();
 
     Ok(())
@@ -337,6 +509,7 @@ async fn cmd_transfer(
     keypair: &Keypair,
     amount: f64,
     recipient: &str,
+    artifacts_path: &str,
 ) -> Result<()> {
     let recipient_pubkey = Pubkey::from_str(recipient)
         .map_err(|_| anyhow!("Invalid recipient address"))?;
@@ -347,15 +520,8 @@ async fn cmd_transfer(
     println!("  Recipient:  {}", style(recipient).cyan());
     println!("  From:       {}", style(keypair.pubkey().to_string()).dim());
     println!();
-
-    println!(
-        "{}",
-        style("  This will deposit and immediately withdraw to recipient.").dim()
-    );
-    println!(
-        "{}",
-        style("  No on-chain link between you and recipient!").dim()
-    );
+    println!("{}", style("  This will deposit and immediately withdraw to recipient.").dim());
+    println!("{}", style("  No on-chain link between you and recipient!").dim());
     println!();
 
     if !Confirm::new()
@@ -367,35 +533,40 @@ async fn cmd_transfer(
         return Ok(());
     }
 
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap(),
-    );
+    // Step 1: Deposit
+    println!();
+    println!("{}", style("Step 1/2: Depositing...").bold());
+    cmd_deposit(client, keypair, amount, artifacts_path).await?;
 
-    pb.set_message("[1/4] Generating deposit proof...");
-    pb.enable_steady_tick(Duration::from_millis(100));
-    std::thread::sleep(Duration::from_secs(2));
+    // Small delay for confirmation
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
-    pb.set_message("[2/4] Sending deposit transaction...");
-    std::thread::sleep(Duration::from_secs(1));
+    // Step 2: Withdraw to recipient
+    println!();
+    println!("{}", style("Step 2/2: Withdrawing to recipient...").bold());
+    
+    // Get latest note
+    let store = NoteStore::load()?;
+    let latest_note = store
+        .notes
+        .iter()
+        .filter(|n| n.status == "deposited")
+        .last()
+        .ok_or_else(|| anyhow!("No deposited note found"))?;
 
-    pb.set_message("[3/4] Generating withdrawal proof...");
-    std::thread::sleep(Duration::from_secs(2));
-
-    pb.set_message("[4/4] Sending withdrawal transaction...");
-    std::thread::sleep(Duration::from_secs(1));
-
-    pb.finish_with_message("Done!");
+    cmd_withdraw(
+        client,
+        keypair,
+        recipient,
+        Some(latest_note.id.clone()),
+        artifacts_path,
+    )
+    .await?;
 
     println!();
     println!("{}", style("✅ Anonymous transfer complete!").green().bold());
     println!();
-    println!(
-        "{}",
-        style("🔐 Privacy achieved:").cyan().bold()
-    );
+    println!("{}", style("🔐 Privacy achieved:").cyan().bold());
     println!("   • No on-chain link between you and recipient");
     println!("   • Transaction passed through ZK privacy pool");
     println!("   • Recipient could be from any pool depositor");
@@ -506,4 +677,77 @@ async fn cmd_info(client: &RpcClient, keypair: &Keypair) -> Result<()> {
     println!();
 
     Ok(())
+}
+
+/// Fetch commitments from on-chain transaction history
+fn fetch_commitments_from_chain(
+    client: &RpcClient,
+    config: &PoolConfig,
+) -> Result<Vec<ark_bn254::Fr>> {
+    use solana_client::rpc_config::RpcTransactionConfig;
+    use solana_sdk::commitment_config::CommitmentConfig;
+    use solana_transaction_status::UiTransactionEncoding;
+
+    let signatures = client.get_signatures_for_address(&config.tree_account)?;
+
+    let mut commitments = Vec::new();
+    let discriminator = [217u8, 149, 130, 143, 221, 52, 252, 119];
+
+    for sig_info in signatures.iter().rev() {
+        let sig = sig_info.signature.parse().ok();
+        if sig.is_none() {
+            continue;
+        }
+
+        let tx_result = client.get_transaction_with_config(
+            &sig.unwrap(),
+            RpcTransactionConfig {
+                encoding: Some(UiTransactionEncoding::Base64),
+                commitment: Some(CommitmentConfig::confirmed()),
+                max_supported_transaction_version: Some(0),
+            },
+        );
+
+        if let Ok(tx) = tx_result {
+            if let Some(meta) = tx.transaction.meta {
+                if meta.err.is_some() {
+                    continue;
+                }
+            }
+
+            // Parse transaction to extract commitments
+            // This is simplified - in production you'd parse the full tx
+            if let Some(tx_data) = tx.transaction.transaction.decode() {
+                for ix in tx_data.message.instructions() {
+                    let data = ix.data.as_slice();
+                    if data.len() >= 424 && data[0..8] == discriminator {
+                        // commitment1 at offset 360, commitment2 at offset 392
+                        let c1_bytes = &data[360..392];
+                        let c2_bytes = &data[392..424];
+
+                        if let (Ok(c1), Ok(c2)) = (
+                            bytes_to_fr(c1_bytes),
+                            bytes_to_fr(c2_bytes),
+                        ) {
+                            commitments.push(c1);
+                            commitments.push(c2);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(commitments)
+}
+
+fn bytes_to_fr(bytes: &[u8]) -> Result<ark_bn254::Fr> {
+    use ark_ff::PrimeField;
+    if bytes.len() != 32 {
+        return Err(anyhow!("Invalid length"));
+    }
+    // Convert from big-endian
+    let mut le_bytes = bytes.to_vec();
+    le_bytes.reverse();
+    Ok(ark_bn254::Fr::from_le_bytes_mod_order(&le_bytes))
 }

@@ -2,6 +2,16 @@
 
 Command-line interface for anonymous SOL transfers on Solana.
 
+**Pure Rust implementation** using:
+- `ark-circom` for witness calculation and Groth16 proof generation
+- `light-poseidon` for Poseidon hash
+- `solana-sdk` for blockchain interaction
+
+## Requirements
+
+- Rust 1.86+ (specified in `rust-toolchain.toml`)
+- Circuit artifacts (`transaction2.wasm` and `transaction2.zkey`)
+
 ## Installation
 
 ### From Source
