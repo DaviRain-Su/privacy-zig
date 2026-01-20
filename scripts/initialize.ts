@@ -1,8 +1,10 @@
 /**
  * Initialize Privacy Pool on Testnet
  * 
- * This script calls the initialize instruction which will create
- * the TreeAccount and GlobalConfig accounts using init constraint.
+ * Creates TreeAccount and GlobalConfig for the privacy pool.
+ * Run this once after deploying the program.
+ * 
+ * Usage: npx tsx initialize.ts
  */
 
 import {
@@ -14,6 +16,7 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
   ComputeBudgetProgram,
+  LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
 import * as fs from 'fs';
 
@@ -35,11 +38,10 @@ async function main() {
   
   // Connect to testnet
   const connection = new Connection('https://api.testnet.solana.com', 'confirmed');
-  
   const balance = await connection.getBalance(payer.publicKey);
-  console.log('Balance:', balance / 1e9, 'SOL\n');
+  console.log('Balance:', balance / LAMPORTS_PER_SOL, 'SOL\n');
   
-  // Generate new keypairs for accounts (needed as signers for init)
+  // Generate new keypairs for accounts
   const treeAccount = Keypair.generate();
   const globalConfig = Keypair.generate();
   
@@ -48,7 +50,7 @@ async function main() {
   
   // Build initialize instruction data
   // Args: max_deposit_amount (u64), fee_recipient (pubkey)
-  const maxDepositAmount = BigInt(100 * 1e9); // 100 SOL max per deposit
+  const maxDepositAmount = BigInt(100 * LAMPORTS_PER_SOL); // 100 SOL max
   const feeRecipient = payer.publicKey;
   
   const data = Buffer.alloc(8 + 8 + 32);
@@ -56,12 +58,7 @@ async function main() {
   data.writeBigUInt64LE(maxDepositAmount, 8);
   feeRecipient.toBuffer().copy(data, 16);
   
-  // Build initialize instruction
-  // Accounts order (from IDL):
-  // 1. tree_account (writable, signer - for init)
-  // 2. global_config (writable, signer - for init)
-  // 3. authority (signer, writable - payer for init)
-  // 4. system_program
+  // Build instruction
   const initializeIx = new TransactionInstruction({
     keys: [
       { pubkey: treeAccount.publicKey, isSigner: true, isWritable: true },
@@ -73,12 +70,11 @@ async function main() {
     data,
   });
   
-  // Add compute budget for safety (init creates large accounts)
+  // Add compute budget (init creates large accounts)
   const computeBudgetIx = ComputeBudgetProgram.setComputeUnitLimit({
     units: 400000,
   });
   
-  // Build transaction
   const transaction = new Transaction()
     .add(computeBudgetIx)
     .add(initializeIx);
@@ -97,7 +93,7 @@ async function main() {
     console.log('Signature:', signature);
     console.log('Explorer:', `https://explorer.solana.com/tx/${signature}?cluster=testnet`);
     
-    // Save config
+    // Save config for other scripts
     const config = {
       programId: PROGRAM_ID.toBase58(),
       treeAccount: treeAccount.publicKey.toBase58(),
@@ -107,18 +103,16 @@ async function main() {
     };
     
     fs.writeFileSync('deployed-config.json', JSON.stringify(config, null, 2));
-    console.log('\nConfig saved to deployed-config.json');
+    console.log('\n📁 Config saved to deployed-config.json');
     
-    // Verify accounts created
+    // Verify accounts
     console.log('\nVerifying accounts...');
     const treeInfo = await connection.getAccountInfo(treeAccount.publicKey);
     const configInfo = await connection.getAccountInfo(globalConfig.publicKey);
     
     if (treeInfo && configInfo) {
-      console.log('  Tree Account: ✅ exists, size:', treeInfo.data.length);
-      console.log('  Global Config: ✅ exists, size:', configInfo.data.length);
-      console.log('  Tree discriminator:', Buffer.from(treeInfo.data.slice(0, 8)).toString('hex'));
-      console.log('  Config discriminator:', Buffer.from(configInfo.data.slice(0, 8)).toString('hex'));
+      console.log('  Tree Account: ✅ size:', treeInfo.data.length, 'bytes');
+      console.log('  Global Config: ✅ size:', configInfo.data.length, 'bytes');
     }
     
   } catch (error: any) {

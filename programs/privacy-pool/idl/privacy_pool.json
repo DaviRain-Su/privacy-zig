@@ -189,6 +189,11 @@
           "name": "fee_recipient",
           "writable": true,
           "signer": false
+        },
+        {
+          "name": "system_program",
+          "writable": false,
+          "signer": false
         }
       ],
       "args": [
@@ -318,6 +323,11 @@
         {
           "name": "fee_recipient_ata",
           "writable": true,
+          "signer": false
+        },
+        {
+          "name": "system_program",
+          "writable": false,
           "signer": false
         }
       ],

@@ -9,3 +9,5 @@ zig-out/
 # OS
 .DS_Store
 Thumbs.db
+scripts/node_modules/
+scripts/note-*.json

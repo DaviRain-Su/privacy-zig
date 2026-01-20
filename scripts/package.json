@@ -3,14 +3,21 @@
   "version": "0.1.0",
   "scripts": {
     "initialize": "npx tsx initialize.ts",
+    "deposit": "npx tsx deposit.ts",
     "status": "npx tsx status.ts"
   },
   "dependencies": {
-    "@solana/web3.js": "^1.95.0"
+    "@solana/web3.js": "^1.95.0",
+    "snarkjs": "^0.7.0",
+    "ffjavascript": "^0.3.0",
+    "circomlibjs": "^0.1.7",
+    "bn.js": "^5.2.1",
+    "crypto-js": "^4.2.0"
   },
   "devDependencies": {
     "tsx": "^4.0.0",
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "@types/bn.js": "^5.1.5"
   }
 }
