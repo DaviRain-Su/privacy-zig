@@ -81,9 +81,9 @@ const DepositArgs = extern struct {
 // ============================================================================
 
 fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
-    const pool = ctx.accounts.pool.getMut();
+    const pool = ctx.accounts().pool.getMut();
     
-    pool.authority = ctx.accounts.authority.id().*;
+    pool.authority = ctx.accounts().authority.id().*;
     pool.next_index = 0;
     pool.current_root = [_]u8{0} ** 32;
     pool.balance = 0;
@@ -100,7 +100,7 @@ fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
 
 fn depositHandler(ctx: zero.Ctx(DepositAccounts)) !void {
     const args = ctx.args(DepositArgs);
-    const pool = ctx.accounts.pool.getMut();
+    const pool = ctx.accounts().pool.getMut();
     
     sol.log.print("Deposit amount: {}", .{args.amount});
     
