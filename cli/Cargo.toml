@@ -1,0 +1,45 @@
+[package]
+name = "privacy-cli"
+version = "0.1.0"
+edition = "2021"
+description = "CLI for anonymous SOL transfers on Solana"
+license = "Apache-2.0"
+
+[[bin]]
+name = "privacy"
+path = "src/main.rs"
+
+[dependencies]
+# Solana
+solana-sdk = "2.0"
+solana-client = "2.0"
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+dialoguer = "0.11"
+indicatif = "0.17"
+console = "0.15"
+
+# Crypto
+ark-bn254 = "0.4"
+ark-ff = "0.4"
+ark-serialize = "0.4"
+ark-groth16 = "0.4"
+light-poseidon = "0.2"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bs58 = "0.5"
+hex = "0.4"
+
+# Async
+tokio = { version = "1.35", features = ["full"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Utils
+rand = "0.8"
+dirs = "5.0"
