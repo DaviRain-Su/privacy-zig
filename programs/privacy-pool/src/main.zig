@@ -565,10 +565,10 @@ fn verifyGroth16Proof(
 
 fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
     const args = ctx.args(InitializeArgs);
-    const tree = ctx.accounts.tree_account.getMut();
-    const config = ctx.accounts.global_config.getMut();
+    const tree = ctx.accounts().tree_account.getMut();
+    const config = ctx.accounts().global_config.getMut();
 
-    const authority_key = ctx.accounts.authority.id().*;
+    const authority_key = ctx.accounts().authority.id().*;
     tree.authority = authority_key;
     config.authority = authority_key;
     config.fee_recipient = args.fee_recipient;
@@ -597,8 +597,8 @@ fn initializeHandler(ctx: zero.Ctx(InitializeAccounts)) !void {
 
 fn updateConfigHandler(ctx: zero.Ctx(UpdateConfigAccounts)) !void {
     const args = ctx.args(UpdateConfigArgs);
-    const config = ctx.accounts.global_config.getMut();
-    const authority_key = ctx.accounts.authority.id().*;
+    const config = ctx.accounts().global_config.getMut();
+    const authority_key = ctx.accounts().authority.id().*;
 
     var matches = true;
     var i: usize = 0;
@@ -622,10 +622,10 @@ fn updateConfigHandler(ctx: zero.Ctx(UpdateConfigAccounts)) !void {
 
 fn initializeSplHandler(ctx: zero.Ctx(InitializeSplAccounts)) !void {
     const args = ctx.args(InitializeSplArgs);
-    const tree = ctx.accounts.tree_account.getMut();
-    const pool = ctx.accounts.token_pool.getMut();
+    const tree = ctx.accounts().tree_account.getMut();
+    const pool = ctx.accounts().token_pool.getMut();
 
-    const authority_key = ctx.accounts.authority.id().*;
+    const authority_key = ctx.accounts().authority.id().*;
     tree.authority = authority_key;
     pool.authority = authority_key;
 
@@ -646,10 +646,10 @@ fn initializeSplHandler(ctx: zero.Ctx(InitializeSplAccounts)) !void {
 
 fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
     const args = ctx.args(TransactArgs);
-    const tree = ctx.accounts.tree_account.getMut();
-    const nullifier1 = ctx.accounts.nullifier1.getMut();
-    const nullifier2 = ctx.accounts.nullifier2.getMut();
-    const config = ctx.accounts.global_config.get();
+    const tree = ctx.accounts().tree_account.getMut();
+    const nullifier1 = ctx.accounts().nullifier1.getMut();
+    const nullifier2 = ctx.accounts().nullifier2.getMut();
+    const config = ctx.accounts().global_config.get();
 
     // Check nullifiers not used
     if (nullifier1.is_used != 0) return error.NullifierAlreadyUsed;
@@ -692,16 +692,16 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         
         // Transfer net amount to pool
         try transferLamports(
-            ctx.accounts.user.lamports(),
-            ctx.accounts.pool_vault.lamports(),
+            ctx.accounts().user.lamports(),
+            ctx.accounts().pool_vault.lamports(),
             net_amount,
         );
         
         // Transfer fee to fee recipient
         if (fee > 0) {
             try transferLamports(
-                ctx.accounts.user.lamports(),
-                ctx.accounts.fee_recipient.lamports(),
+                ctx.accounts().user.lamports(),
+                ctx.accounts().fee_recipient.lamports(),
                 fee,
             );
             
@@ -719,16 +719,16 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         
         // Transfer net amount to user
         try transferLamports(
-            ctx.accounts.pool_vault.lamports(),
-            ctx.accounts.user.lamports(),
+            ctx.accounts().pool_vault.lamports(),
+            ctx.accounts().user.lamports(),
             net_amount,
         );
         
         // Transfer fee to fee recipient
         if (fee > 0) {
             try transferLamports(
-                ctx.accounts.pool_vault.lamports(),
-                ctx.accounts.fee_recipient.lamports(),
+                ctx.accounts().pool_vault.lamports(),
+                ctx.accounts().fee_recipient.lamports(),
                 fee,
             );
             
@@ -758,10 +758,10 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
 
 fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
     const args = ctx.args(TransactArgs);
-    const tree = ctx.accounts.tree_account.getMut();
-    const nullifier1 = ctx.accounts.nullifier1.getMut();
-    const nullifier2 = ctx.accounts.nullifier2.getMut();
-    const config = ctx.accounts.global_config.get();
+    const tree = ctx.accounts().tree_account.getMut();
+    const nullifier1 = ctx.accounts().nullifier1.getMut();
+    const nullifier2 = ctx.accounts().nullifier2.getMut();
+    const config = ctx.accounts().global_config.get();
 
     // Check nullifiers not used
     if (nullifier1.is_used != 0) return error.NullifierAlreadyUsed;
@@ -804,18 +804,18 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
         
         // Transfer net amount to vault
         try transferTokensCpi(
-            ctx.accounts.user_token_account.info(),
-            ctx.accounts.vault_token_account.info(),
-            ctx.accounts.user.info(),
+            ctx.accounts().user_token_account.info(),
+            ctx.accounts().vault_token_account.info(),
+            ctx.accounts().user.info(),
             net_amount,
         );
         
         // Transfer fee to fee recipient
         if (fee > 0) {
             try transferTokensCpi(
-                ctx.accounts.user_token_account.info(),
-                ctx.accounts.fee_recipient_ata.info(),
-                ctx.accounts.user.info(),
+                ctx.accounts().user_token_account.info(),
+                ctx.accounts().fee_recipient_ata.info(),
+                ctx.accounts().user.info(),
                 fee,
             );
             
@@ -832,7 +832,7 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
         const net_amount = withdraw_amount - fee;
         
         // PDA seeds for vault authority
-        const tree_key = ctx.accounts.tree_account.id();
+        const tree_key = ctx.accounts().tree_account.id();
         const seeds: [2][]const u8 = .{
             "vault_authority",
             &tree_key.bytes,
@@ -840,9 +840,9 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
         
         // Transfer net amount to user
         try transferTokensFromPdaCpi(
-            ctx.accounts.vault_token_account.info(),
-            ctx.accounts.user_token_account.info(),
-            ctx.accounts.vault_authority.info(),
+            ctx.accounts().vault_token_account.info(),
+            ctx.accounts().user_token_account.info(),
+            ctx.accounts().vault_authority.info(),
             net_amount,
             &seeds,
         );
@@ -850,9 +850,9 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
         // Transfer fee to fee recipient
         if (fee > 0) {
             try transferTokensFromPdaCpi(
-                ctx.accounts.vault_token_account.info(),
-                ctx.accounts.fee_recipient_ata.info(),
-                ctx.accounts.vault_authority.info(),
+                ctx.accounts().vault_token_account.info(),
+                ctx.accounts().fee_recipient_ata.info(),
+                ctx.accounts().vault_authority.info(),
                 fee,
                 &seeds,
             );
