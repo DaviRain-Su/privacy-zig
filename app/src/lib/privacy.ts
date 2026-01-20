@@ -14,6 +14,7 @@ import {
   LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
 import BN from 'bn.js';
+import { buildPoseidon } from 'circomlibjs';
 
 // ============================================================================
 // Constants
@@ -33,29 +34,20 @@ export const POOL_CONFIG = {
 };
 
 // ============================================================================
-// Poseidon Hash (using circomlibjs)
+// Poseidon Hash (circomlibjs 0.1.7 - async API)
 // ============================================================================
 
-let poseidonFn: ((inputs: bigint[]) => bigint) | null = null;
+let poseidonInstance: any = null;
 
-async function initPoseidon() {
-  if (poseidonFn) return;
-  
-  // Dynamic import
-  const circomlibjs = await import('circomlibjs');
-  const poseidon = circomlibjs.poseidon;
-  
-  // Wrap to return bigint directly
-  poseidonFn = (inputs: bigint[]) => {
-    const result = poseidon(inputs);
-    // poseidon returns a bigint directly in newer versions
-    return typeof result === 'bigint' ? result : BigInt(result.toString());
-  };
+async function initPoseidon(): Promise<void> {
+  if (poseidonInstance) return;
+  poseidonInstance = await buildPoseidon();
 }
 
 function poseidonHash(inputs: bigint[]): bigint {
-  if (!poseidonFn) throw new Error('Poseidon not initialized');
-  return poseidonFn(inputs);
+  if (!poseidonInstance) throw new Error('Poseidon not initialized');
+  const hash = poseidonInstance(inputs);
+  return poseidonInstance.F.toObject(hash);
 }
 
 // ============================================================================
@@ -100,9 +92,6 @@ class MerkleTree {
   
   constructor(height: number = MERKLE_TREE_HEIGHT) {
     this.height = height;
-  }
-  
-  init() {
     this.zeros = [0n];
     for (let i = 1; i <= this.height; i++) {
       this.zeros.push(poseidonHash([this.zeros[i - 1], this.zeros[i - 1]]));
@@ -245,6 +234,7 @@ async function fetchCommitmentsFromChain(connection: Connection): Promise<bigint
         
         const data = Buffer.from(ix.data);
         if (data.length >= 424 && data[0] === TRANSACT_DISCRIMINATOR[0]) {
+          // Extract commitments from instruction data (offsets 360-392 and 392-424)
           commitments.push(
             BigInt('0x' + data.slice(360, 392).toString('hex')),
             BigInt('0x' + data.slice(392, 424).toString('hex'))
@@ -312,10 +302,20 @@ export async function anonymousTransfer(
     // Generate keypair for UTXOs
     const utxoKeypair = generateKeypair();
     
+    // ========== Fetch current state ==========
+    const currentLeafIndex = await getCurrentLeafIndex(connection);
+    
+    // Build empty tree (for deposit with zero-value inputs, any root works)
+    const tree = new MerkleTree();
+    const emptyRoot = tree.zeros[MERKLE_TREE_HEIGHT];
+    
+    console.log('Current leaf index:', currentLeafIndex);
+    console.log('Empty root:', emptyRoot.toString());
+    
     // ========== STEP 1: Prepare Deposit ==========
     report('deposit-proof', 'Generating deposit proof...');
     
-    // Dummy inputs (zero value)
+    // Dummy inputs (zero value) - these don't need to be in tree
     const dummyBlinding1 = generateBlinding();
     const dummyBlinding2 = generateBlinding();
     const dummyCommitment1 = poseidonHash([0n, utxoKeypair.pubkey, dummyBlinding1, solMintAddress]);
@@ -331,11 +331,7 @@ export async function anonymousTransfer(
     const outputCommitment1 = poseidonHash([BigInt(amountLamports), utxoKeypair.pubkey, outBlinding1, solMintAddress]);
     const outputCommitment2 = poseidonHash([0n, utxoKeypair.pubkey, outBlinding2, solMintAddress]);
     
-    // Empty tree for deposit
-    const tree = new MerkleTree();
-    tree.init();
-    const emptyRoot = tree.zeros[MERKLE_TREE_HEIGHT];
-    
+    // For deposit with zero-value inputs, use empty root (circuit accepts any root when inputs are zero)
     const depositPublicAmount = new BN(amountLamports).add(FIELD_SIZE).mod(FIELD_SIZE);
     const senderNum = BigInt('0x' + senderPubkey.toBuffer().toString('hex').slice(0, 16));
     const depositExtDataHash = poseidonHash([senderNum, BigInt(amountLamports)]);
@@ -358,7 +354,11 @@ export async function anonymousTransfer(
       outBlinding: [outBlinding1.toString(), outBlinding2.toString()],
     };
     
+    console.log('Generating deposit proof...');
     const depositProofResult = await generateProof(depositInput);
+    console.log('Deposit proof generated!');
+    console.log('Public signals:', depositProofResult.publicSignals);
+    
     const depositProofBuffer = await serializeProof(depositProofResult.proof);
     const depositPublicInputs = await serializePublicSignals(depositProofResult.publicSignals);
     
@@ -388,6 +388,9 @@ export async function anonymousTransfer(
       PROGRAM_ID
     );
     
+    console.log('Nullifier1 PDA:', depositNull1PDA.toBase58());
+    console.log('Nullifier2 PDA:', depositNull2PDA.toBase58());
+    
     const depositIx = new TransactionInstruction({
       keys: [
         { pubkey: POOL_CONFIG.treeAccount, isSigner: false, isWritable: true },
@@ -406,8 +409,6 @@ export async function anonymousTransfer(
     // Send deposit transaction
     report('deposit-tx', 'Sending deposit transaction...');
     
-    const currentLeafIndex = await getCurrentLeafIndex(connection);
-    
     const depositTx = new Transaction()
       .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }))
       .add(depositIx);
@@ -418,40 +419,47 @@ export async function anonymousTransfer(
     depositTx.feePayer = senderPubkey;
     
     const depositSig = await sendTransaction(depositTx, connection);
+    console.log('Deposit tx sent:', depositSig);
+    
     await connection.confirmTransaction({
       signature: depositSig,
       blockhash: depositBlockhash,
       lastValidBlockHeight: depositHeight,
     });
+    console.log('Deposit confirmed!');
     
     // ========== STEP 2: Prepare Withdrawal ==========
     report('withdraw-proof', 'Generating withdrawal proof...');
     
-    // Wait a bit for the deposit to be indexed
-    await new Promise(r => setTimeout(r, 2000));
+    // Wait for the deposit to be indexed
+    await new Promise(r => setTimeout(r, 3000));
     
     // Fetch updated commitments
-    const commitments = await fetchCommitmentsFromChain(connection);
+    const newCommitments = await fetchCommitmentsFromChain(connection);
     const withdrawTree = new MerkleTree();
-    withdrawTree.init();
-    for (const c of commitments) {
+    for (const c of newCommitments) {
       withdrawTree.insert(c);
     }
     
-    const leafIndex = withdrawTree.findLeafIndex(outputCommitment1);
+    // Find our commitment
+    let leafIndex = withdrawTree.findLeafIndex(outputCommitment1);
     if (leafIndex === -1) {
-      // Fallback: use the expected index
+      // If not found, add it manually (use expected index)
+      leafIndex = currentLeafIndex;
       withdrawTree.insert(outputCommitment1);
       withdrawTree.insert(outputCommitment2);
     }
     
-    const actualLeafIndex = leafIndex >= 0 ? leafIndex : currentLeafIndex;
-    const { pathElements } = withdrawTree.getPath(actualLeafIndex);
+    console.log('Leaf index for withdrawal:', leafIndex);
+    
+    const { pathElements, pathIndices } = withdrawTree.getPath(leafIndex);
     const withdrawRoot = withdrawTree.getRoot();
     
+    console.log('Withdraw root:', withdrawRoot.toString());
+    
     // Compute nullifier for withdrawal
-    const signature = poseidonHash([utxoKeypair.privkey, outputCommitment1, BigInt(actualLeafIndex)]);
-    const withdrawNullifier = poseidonHash([outputCommitment1, BigInt(actualLeafIndex), signature]);
+    const signature = poseidonHash([utxoKeypair.privkey, outputCommitment1, BigInt(leafIndex)]);
+    const withdrawNullifier = poseidonHash([outputCommitment1, BigInt(leafIndex), signature]);
     
     // Dummy second input
     const withdrawDummyBlinding = generateBlinding();
@@ -478,7 +486,7 @@ export async function anonymousTransfer(
       inAmount: [amountLamports.toString(), '0'],
       inPrivateKey: [utxoKeypair.privkey.toString(), utxoKeypair.privkey.toString()],
       inBlinding: [outBlinding1.toString(), withdrawDummyBlinding.toString()],
-      inPathIndices: [actualLeafIndex, 0],
+      inPathIndices: [leafIndex, 0],
       inPathElements: [
         pathElements.map(e => e.toString()),
         new Array(MERKLE_TREE_HEIGHT).fill('0'),
@@ -489,7 +497,10 @@ export async function anonymousTransfer(
       outBlinding: [withdrawOutBlinding1.toString(), withdrawOutBlinding2.toString()],
     };
     
+    console.log('Generating withdraw proof...');
     const withdrawProofResult = await generateProof(withdrawInput);
+    console.log('Withdraw proof generated!');
+    
     const withdrawProofBuffer = await serializeProof(withdrawProofResult.proof);
     const withdrawPublicInputs = await serializePublicSignals(withdrawProofResult.publicSignals);
     
@@ -543,11 +554,14 @@ export async function anonymousTransfer(
     withdrawTx.feePayer = senderPubkey;
     
     const withdrawSig = await sendTransaction(withdrawTx, connection);
+    console.log('Withdraw tx sent:', withdrawSig);
+    
     await connection.confirmTransaction({
       signature: withdrawSig,
       blockhash: withdrawBlockhash,
       lastValidBlockHeight: withdrawHeight,
     });
+    console.log('Withdraw confirmed!');
     
     report('done', 'Transfer complete!');
     
@@ -558,6 +572,7 @@ export async function anonymousTransfer(
     };
     
   } catch (error: any) {
+    console.error('Transfer error:', error);
     return {
       success: false,
       error: error.message || 'Transfer failed',
