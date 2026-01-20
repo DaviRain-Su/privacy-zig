@@ -495,24 +495,47 @@ fn g1Mul(point: [64]u8, scalar: [32]u8) ![64]u8 {
     return result;
 }
 
+/// BN254 scalar field modulus (r): 21888242871839275222246405745257275088548364400416034343698204186575808495617
+/// This is SNARK_FIELD_SIZE used in Tornado Cash / Privacy Cash
+const FIELD_SIZE: [32]u8 = .{
+    0x30, 0x64, 0x4E, 0x72, 0xE1, 0x31, 0xA0, 0x29,
+    0xB8, 0x50, 0x45, 0xB6, 0x81, 0x81, 0x58, 0x5D,
+    0x28, 0x33, 0xE8, 0x48, 0x79, 0xB9, 0x70, 0x91,
+    0x43, 0xE1, 0xF5, 0x93, 0xF0, 0x00, 0x00, 0x01,
+};
+
 fn i64ToFieldElement(value: i64) [32]u8 {
-    // Convert i64 to 32-byte big-endian field element
+    // Convert i64 to 32-byte big-endian field element in BN254 scalar field
     var result: [32]u8 = [_]u8{0} ** 32;
     if (value >= 0) {
         const u_value: u64 = @intCast(value);
         // Big-endian: value goes at the END of the array
         std.mem.writeInt(u64, result[24..32], u_value, .big);
     } else {
-        // Negative: two's complement in field
-        // For BN254: -x = FIELD_SIZE - x
-        // But for simplicity with small negatives, we can use two's complement
-        const u_value: u64 = @bitCast(value);
-        std.mem.writeInt(u64, result[24..32], u_value, .big);
-        // Fill upper bytes with 0xFF for two's complement
-        var i: usize = 0;
-        while (i < 24) : (i += 1) {
-            result[i] = 0xFF;
+        // Negative: compute FIELD_SIZE - |value| mod FIELD_SIZE
+        // For small negatives (which is our case), this is FIELD_SIZE + value
+        const abs_value: u64 = @intCast(-value);
+        
+        // Start with FIELD_SIZE
+        var field: [32]u8 = FIELD_SIZE;
+        
+        // Subtract abs_value from field (big-endian subtraction)
+        var borrow: u64 = abs_value;
+        var i: usize = 32;
+        while (i > 0) : (i -= 1) {
+            const idx = i - 1;
+            const byte_val: u64 = field[idx];
+            if (byte_val >= borrow) {
+                field[idx] = @truncate(byte_val - borrow);
+                borrow = 0;
+                break;
+            } else {
+                field[idx] = @truncate(256 + byte_val - (borrow % 256));
+                borrow = (borrow / 256) + 1;
+            }
         }
+        
+        result = field;
     }
     return result;
 }
@@ -751,28 +774,53 @@ fn transactHandler(ctx: zero.Ctx(TransactAccounts)) !void {
         sol.log.log("Deposit completed");
         
     } else if (args.public_amount < 0) {
-        // Withdrawal: pool_vault -> user
+        // Withdrawal: pool_vault -> user via CPI with signer seeds
         const withdraw_amount: u64 = @intCast(-args.public_amount);
         
         // Calculate withdrawal fee
         const fee = (withdraw_amount * config.withdrawal_fee_rate) / FEE_DENOMINATOR;
         const net_amount = withdraw_amount - fee;
         
-        // Transfer net amount to user
-        try transferLamports(
-            ctx.accounts().pool_vault.lamports(),
-            ctx.accounts().user.lamports(),
-            net_amount,
-        );
+        const pool_vault_info = ctx.accounts().pool_vault.info();
+        const user_info2 = ctx.accounts().user.info();
         
-        // Transfer fee to fee recipient
+        // Derive the bump by trying to match the pool_vault address
+        var bump: u8 = 255;
+        while (bump > 0) : (bump -= 1) {
+            const bump_slice = [_]u8{bump};
+            const seeds_with_bump = [_][]const u8{
+                "pool_vault",
+                &bump_slice,
+            };
+            const derived = sol.PublicKey.createProgramAddress(&seeds_with_bump, ctx.programId().*) catch continue;
+            if (std.mem.eql(u8, &derived.bytes, &pool_vault_info.id.bytes)) {
+                break;
+            }
+        }
+        
+        // Transfer net amount to user via CPI with signer seeds
+        const bump_slice = [_]u8{bump};
+        const transfer_seeds = [_][]const u8{
+            "pool_vault",
+            &bump_slice,
+        };
+        const signer_seeds = [_][]const []const u8{&transfer_seeds};
+        
+        sol.system_program.transferCpi(.{
+            .from = pool_vault_info,
+            .to = user_info2,
+            .lamports = net_amount,
+            .seeds = &signer_seeds,
+        }) catch return error.TransferFailed;
+        
+        // Transfer fee to fee recipient if any
         if (fee > 0) {
-            try transferLamports(
-                ctx.accounts().pool_vault.lamports(),
-                ctx.accounts().fee_recipient.lamports(),
-                fee,
-            );
-            
+            sol.system_program.transferCpi(.{
+                .from = pool_vault_info,
+                .to = ctx.accounts().fee_recipient.info(),
+                .lamports = fee,
+                .seeds = &signer_seeds,
+            }) catch return error.TransferFailed;
         }
         
         sol.log.log("Withdrawal completed");

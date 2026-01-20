@@ -1,6 +1,9 @@
 /**
  * Withdraw SOL from Privacy Pool
  * 
+ * Pure client-side implementation - no indexer needed!
+ * Rebuilds Merkle tree from on-chain data.
+ * 
  * Usage: npx tsx withdraw.ts <note-file> [recipient]
  * If recipient is not specified, withdraws to the payer's wallet
  */
@@ -34,7 +37,6 @@ const MERKLE_TREE_HEIGHT = 26;
 const FIELD_SIZE = new BN('21888242871839275222246405745257275088548364400416034343698204186575808495617');
 const BN254_FIELD_MODULUS = BigInt('21888242871839275222246405745257275088696311157297823662689037894645226208583');
 
-// Discriminator for transact instruction
 const TRANSACT_DISCRIMINATOR = Buffer.from([217, 149, 130, 143, 221, 52, 252, 119]);
 
 // ============================================================================
@@ -53,6 +55,151 @@ async function getPoseidon() {
 function poseidonHash(inputs: bigint[]): bigint {
   const hash = poseidon(inputs);
   return poseidon.F.toObject(hash);
+}
+
+// ============================================================================
+// Merkle Tree Implementation
+// ============================================================================
+
+class MerkleTree {
+  height: number;
+  zeros: bigint[];
+  leaves: bigint[] = [];
+  layers: bigint[][] = [];
+  
+  constructor(height: number) {
+    this.height = height;
+    this.zeros = this.computeZeroHashes();
+  }
+  
+  computeZeroHashes(): bigint[] {
+    const zeros: bigint[] = [0n];
+    for (let i = 1; i <= this.height; i++) {
+      zeros.push(poseidonHash([zeros[i - 1], zeros[i - 1]]));
+    }
+    return zeros;
+  }
+  
+  insert(leaf: bigint) {
+    this.leaves.push(leaf);
+    this.rebuildTree();
+  }
+  
+  rebuildTree() {
+    this.layers = [this.leaves.slice()];
+    
+    for (let level = 0; level < this.height; level++) {
+      const currentLayer = this.layers[level];
+      const nextLayer: bigint[] = [];
+      
+      for (let i = 0; i < currentLayer.length; i += 2) {
+        const left = currentLayer[i];
+        const right = i + 1 < currentLayer.length ? currentLayer[i + 1] : this.zeros[level];
+        nextLayer.push(poseidonHash([left, right]));
+      }
+      
+      // If empty, use zero hash
+      if (nextLayer.length === 0) {
+        nextLayer.push(this.zeros[level + 1]);
+      }
+      
+      this.layers.push(nextLayer);
+    }
+  }
+  
+  getRoot(): bigint {
+    if (this.layers.length === 0) return this.zeros[this.height];
+    return this.layers[this.layers.length - 1][0];
+  }
+  
+  getPath(leafIndex: number): { pathElements: bigint[]; pathIndices: number[] } {
+    const pathElements: bigint[] = [];
+    const pathIndices: number[] = [];
+    
+    let currentIndex = leafIndex;
+    
+    for (let level = 0; level < this.height; level++) {
+      const isRight = currentIndex % 2 === 1;
+      const siblingIndex = isRight ? currentIndex - 1 : currentIndex + 1;
+      
+      pathIndices.push(isRight ? 1 : 0);
+      
+      const currentLayer = this.layers[level] || [];
+      if (siblingIndex < currentLayer.length) {
+        pathElements.push(currentLayer[siblingIndex]);
+      } else {
+        pathElements.push(this.zeros[level]);
+      }
+      
+      currentIndex = Math.floor(currentIndex / 2);
+    }
+    
+    return { pathElements, pathIndices };
+  }
+}
+
+// ============================================================================
+// Fetch Commitments from Chain (using transaction history)
+// ============================================================================
+
+async function fetchCommitmentsFromChain(
+  connection: Connection,
+  treeAccount: PublicKey,
+  programId: PublicKey,
+): Promise<bigint[]> {
+  console.log('Fetching commitment history from chain...');
+  
+  // Get all signatures for the tree account
+  const signatures = await connection.getSignaturesForAddress(treeAccount, { limit: 1000 });
+  console.log(`Found ${signatures.length} transactions`);
+  
+  const commitments: bigint[] = [];
+  
+  for (const sigInfo of signatures.reverse()) { // Process in chronological order
+    try {
+      const tx = await connection.getTransaction(sigInfo.signature, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      });
+      
+      if (!tx || !tx.meta || tx.meta.err) continue;
+      
+      // Look for transact instruction data
+      // The instruction data contains commitments at specific offsets
+      // Offset: 8 (disc) + 256 (proof) + 32 (root) + 32 (null1) + 32 (null2) + 0 = commitment1 at 360
+      // commitment2 at 392
+      
+      const message = tx.transaction.message;
+      const instructions = message.compiledInstructions || [];
+      
+      for (const ix of instructions) {
+        const progIdIndex = ix.programIdIndex;
+        const accountKeys = message.staticAccountKeys || message.accountKeys;
+        
+        if (accountKeys[progIdIndex].equals(programId)) {
+          const data = Buffer.from(ix.data);
+          
+          // Check if it's a transact instruction
+          if (data.length >= 400 && data.slice(0, 8).equals(TRANSACT_DISCRIMINATOR)) {
+            // Extract commitment1 and commitment2
+            const commitment1Bytes = data.slice(360, 392);
+            const commitment2Bytes = data.slice(392, 424);
+            
+            // Convert from big-endian to bigint
+            const c1 = BigInt('0x' + commitment1Bytes.toString('hex'));
+            const c2 = BigInt('0x' + commitment2Bytes.toString('hex'));
+            
+            commitments.push(c1, c2);
+          }
+        }
+      }
+    } catch (e) {
+      // Skip failed transactions
+    }
+  }
+  
+  console.log(`Extracted ${commitments.length} commitments`);
+  return commitments;
 }
 
 // ============================================================================
@@ -102,54 +249,9 @@ function parseToBytesArray(publicSignals: string[]): number[][] {
   );
 }
 
-// ============================================================================
-// Merkle Tree Utils
-// ============================================================================
-
-function computeZeroHashes(): bigint[] {
-  const zeros: bigint[] = [0n];
-  for (let i = 1; i <= MERKLE_TREE_HEIGHT; i++) {
-    zeros.push(poseidonHash([zeros[i - 1], zeros[i - 1]]));
-  }
-  return zeros;
-}
-
 function generateBlinding(): bigint {
   const bytes = crypto.randomBytes(31);
   return BigInt('0x' + bytes.toString('hex'));
-}
-
-// Build Merkle path from chain events (simplified - assumes we have the commitments)
-async function buildMerklePath(
-  connection: Connection,
-  treeAccount: PublicKey,
-  leafIndex: number,
-  commitment: bigint,
-): Promise<{ pathElements: string[]; pathIndices: number[] }> {
-  // Read tree data
-  const treeInfo = await connection.getAccountInfo(treeAccount);
-  if (!treeInfo) throw new Error('Tree account not found');
-  
-  const zeros = computeZeroHashes();
-  
-  // For now, build a simple path assuming this is the only leaf
-  // In production, you'd need to reconstruct the tree from all commitments
-  const pathElements: string[] = [];
-  const pathIndices: number[] = [];
-  
-  let currentIndex = leafIndex;
-  for (let level = 0; level < MERKLE_TREE_HEIGHT; level++) {
-    const isRight = currentIndex % 2 === 1;
-    pathIndices.push(isRight ? 1 : 0);
-    
-    // Get sibling - if no sibling exists, use zero hash
-    // This is simplified - real implementation needs to track all leaves
-    pathElements.push(zeros[level].toString());
-    
-    currentIndex = Math.floor(currentIndex / 2);
-  }
-  
-  return { pathElements, pathIndices };
 }
 
 // ============================================================================
@@ -169,6 +271,7 @@ async function withdraw(notePath: string, recipientAddress?: string) {
   console.log('Note loaded:');
   console.log('  Amount:', note.amount / LAMPORTS_PER_SOL, 'SOL');
   console.log('  Leaf Index:', note.leafIndex);
+  console.log('  Commitment:', note.commitment.slice(0, 20) + '...');
   
   // Load config
   const configPath = path.join(__dirname, 'deployed-config.json');
@@ -200,9 +303,55 @@ async function withdraw(notePath: string, recipientAddress?: string) {
   const blinding = BigInt(note.blinding);
   const commitment = BigInt(note.commitment);
   
+  // Fetch all commitments and rebuild Merkle tree
+  const commitments = await fetchCommitmentsFromChain(
+    connection,
+    new PublicKey(config.treeAccount),
+    PROGRAM_ID,
+  );
+  
+  // Build Merkle tree
+  const tree = new MerkleTree(MERKLE_TREE_HEIGHT);
+  for (const c of commitments) {
+    tree.insert(c);
+  }
+  
+  const treeRoot = tree.getRoot();
+  console.log('\nRebuilt tree:');
+  console.log('  Leaves:', tree.leaves.length);
+  console.log('  Root:', treeRoot.toString(16).slice(0, 20) + '...');
+  
+  // Verify our commitment is in the tree
+  const foundIndex = tree.leaves.findIndex(l => l === commitment);
+  if (foundIndex === -1) {
+    console.error('❌ Commitment not found in tree!');
+    console.log('Expected commitment:', commitment.toString());
+    console.log('Tree leaves:', tree.leaves.map(l => l.toString().slice(0, 20) + '...'));
+    process.exit(1);
+  }
+  
+  const actualLeafIndex = foundIndex;
+  console.log('  Our commitment at index:', actualLeafIndex);
+  
+  if (actualLeafIndex !== note.leafIndex) {
+    console.log(`  ⚠️ Note leafIndex (${note.leafIndex}) differs from actual (${actualLeafIndex})`);
+    console.log('  Using actual index from tree');
+  }
+  
+  // Get Merkle path
+  const { pathElements, pathIndices } = tree.getPath(actualLeafIndex);
+  
+  // Convert pathIndices array to a single number (bit representation)
+  let pathIndexNum = 0;
+  for (let i = 0; i < pathIndices.length; i++) {
+    if (pathIndices[i] === 1) {
+      pathIndexNum |= (1 << i);
+    }
+  }
+  
   // Compute nullifier for the input
-  const signature = poseidonHash([privkey, commitment, BigInt(note.leafIndex)]);
-  const inputNullifier = poseidonHash([commitment, BigInt(note.leafIndex), signature]);
+  const signature = poseidonHash([privkey, commitment, BigInt(actualLeafIndex)]);
+  const inputNullifier = poseidonHash([commitment, BigInt(actualLeafIndex), signature]);
   
   // Create dummy second input (zero amount)
   const dummyBlinding = generateBlinding();
@@ -216,32 +365,15 @@ async function withdraw(notePath: string, recipientAddress?: string) {
   const outputCommitment1 = poseidonHash([0n, pubkey, outBlinding1, solMintAddress]);
   const outputCommitment2 = poseidonHash([0n, pubkey, outBlinding2, solMintAddress]);
   
-  // Get Merkle path
-  const { pathElements, pathIndices } = await buildMerklePath(
-    connection,
-    new PublicKey(config.treeAccount),
-    note.leafIndex,
-    commitment,
-  );
-  
-  // Get current root from chain
-  const treeInfo = await connection.getAccountInfo(new PublicKey(config.treeAccount));
-  if (!treeInfo) throw new Error('Tree account not found');
-  
-  // Read root_index and get the current root
-  const rootIndex = Number(treeInfo.data.readBigUInt64LE(48));
-  const rootOffset = 79 + (rootIndex * 32); // 79 is where root_history starts
-  const currentRoot = treeInfo.data.slice(rootOffset, rootOffset + 32);
-  const root = BigInt('0x' + Buffer.from(currentRoot).toString('hex'));
-  
-  console.log('\nCurrent root index:', rootIndex);
-  console.log('Root:', root.toString(16));
+  // Use the tree root we computed
+  const root = treeRoot;
   
   // Public amount (negative for withdrawal)
   const publicAmountBN = new BN(withdrawAmount).neg().add(FIELD_SIZE).mod(FIELD_SIZE);
   
-  // ExtData hash
-  const recipientNum = BigInt('0x' + recipient.toBuffer().toString('hex').slice(0, 16));
+  // ExtData hash - recipient info
+  const recipientBytes = recipient.toBuffer();
+  const recipientNum = BigInt('0x' + recipientBytes.slice(0, 8).toString('hex'));
   const extDataHash = poseidonHash([recipientNum, BigInt(withdrawAmount)]);
   
   // Build proof input
@@ -254,8 +386,11 @@ async function withdraw(notePath: string, recipientAddress?: string) {
     inAmount: [withdrawAmount.toString(), '0'],
     inPrivateKey: [privkey.toString(), privkey.toString()],
     inBlinding: [blinding.toString(), dummyBlinding.toString()],
-    inPathIndices: [note.leafIndex, 0],
-    inPathElements: [pathElements, new Array(MERKLE_TREE_HEIGHT).fill('0')],
+    inPathIndices: [actualLeafIndex, 0],  // Use leaf index directly
+    inPathElements: [
+      pathElements.map(e => e.toString()),
+      new Array(MERKLE_TREE_HEIGHT).fill('0'),
+    ],
     outputCommitment: [outputCommitment1.toString(), outputCommitment2.toString()],
     outAmount: ['0', '0'],
     outPubkey: [pubkey.toString(), pubkey.toString()],
@@ -272,7 +407,18 @@ async function withdraw(notePath: string, recipientAddress?: string) {
     wasmPath,
     zkeyPath
   );
-  console.log('Proof generated');
+  console.log('Proof generated successfully!');
+  
+  // Verify the proof locally first
+  const vkeyPath = path.join(__dirname, '..', 'artifacts', 'verifyingkey2.json');
+  const vkey = JSON.parse(fs.readFileSync(vkeyPath, 'utf-8'));
+  const isValid = await groth16.verify(vkey, publicSignals, proof);
+  console.log('Local verification:', isValid ? '✅ Valid' : '❌ Invalid');
+  
+  if (!isValid) {
+    console.error('Proof verification failed locally!');
+    process.exit(1);
+  }
   
   // Serialize
   const proofBytes = parseProofToBytesArray(proof);
@@ -326,7 +472,7 @@ async function withdraw(notePath: string, recipientAddress?: string) {
       { pubkey: new PublicKey(config.globalConfig), isSigner: false, isWritable: false },
       { pubkey: poolVault, isSigner: false, isWritable: true },
       { pubkey: payer.publicKey, isSigner: true, isWritable: true },
-      { pubkey: recipient, isSigner: false, isWritable: true }, // recipient for withdrawal
+      { pubkey: recipient, isSigner: false, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     programId: PROGRAM_ID,
@@ -339,10 +485,10 @@ async function withdraw(notePath: string, recipientAddress?: string) {
   
   const transaction = new Transaction().add(computeBudgetIx).add(transactIx);
   
-  console.log('\nSending transaction...');
+  console.log('\nSending withdrawal transaction...');
   
   try {
-    const signature = await sendAndConfirmTransaction(
+    const txSignature = await sendAndConfirmTransaction(
       connection,
       transaction,
       [payer],
@@ -351,12 +497,14 @@ async function withdraw(notePath: string, recipientAddress?: string) {
     
     console.log('\n✅ Withdrawal successful!');
     console.log('Amount:', withdrawAmount / LAMPORTS_PER_SOL, 'SOL');
-    console.log('Signature:', signature);
-    console.log('Explorer:', `https://explorer.solana.com/tx/${signature}?cluster=testnet`);
+    console.log('Recipient:', recipient.toBase58());
+    console.log('Signature:', txSignature);
+    console.log('Explorer:', `https://explorer.solana.com/tx/${txSignature}?cluster=testnet`);
     
-    // Delete the used note
-    fs.unlinkSync(notePath);
-    console.log('\n🗑️  Note file deleted (nullifier spent)');
+    // Archive the used note
+    const archivePath = notePath.replace('.json', '.spent.json');
+    fs.renameSync(notePath, archivePath);
+    console.log('\n📁 Note archived to:', archivePath);
     
   } catch (error: any) {
     console.error('\n❌ Withdrawal failed:', error.message);
@@ -373,6 +521,9 @@ const recipient = process.argv[3];
 
 if (!noteFile) {
   console.log('Usage: npx tsx withdraw.ts <note-file> [recipient]');
+  console.log('\nExample:');
+  console.log('  npx tsx withdraw.ts note-1234567890.json');
+  console.log('  npx tsx withdraw.ts note-1234567890.json SomeWallet...');
   process.exit(1);
 }
 
