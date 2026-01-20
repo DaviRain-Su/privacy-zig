@@ -198,15 +198,21 @@ pub fn insertLeaf(tree: *TreeAccount, leaf: [32]u8) ![32]u8 {
 }
 
 // ============================================================================
-// Event Emission (using log for compatibility)
+// Event Definitions (Privacy Cash compatible)
 // ============================================================================
 
-/// Emit CommitmentData event (Privacy Cash compatible format)
+/// CommitmentData event - emitted when a new commitment is added to the Merkle tree
+const CommitmentDataEvent = struct {
+    index: u64,
+    commitment: [32]u8,
+};
+
+/// Emit CommitmentData event using Anchor event format
 fn emitCommitmentEvent(index: u64, commitment: [32]u8) void {
-    _ = index;
-    _ = commitment;
-    // Format: "EVENT:CommitmentData:index:<index>:commitment:<hex>"
-    sol.log.log("EVENT:CommitmentData");
+    anchor.event.emitEvent(CommitmentDataEvent, .{
+        .index = index,
+        .commitment = commitment,
+    });
 }
 
 // ============================================================================
