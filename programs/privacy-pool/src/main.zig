@@ -14,6 +14,7 @@ const std = @import("std");
 const sol = @import("solana_program_sdk");
 const anchor = @import("sol_anchor_zig");
 const zero = anchor.zero_cu;
+const idl = anchor.idl_zero;
 const spl_token = anchor.spl.token;
 const syscall_wrappers = @import("syscall_wrappers.zig");
 
@@ -879,6 +880,87 @@ fn transactSplHandler(ctx: zero.Ctx(TransactSplAccounts)) !void {
 
     sol.log.log("Transact SPL completed");
 }
+
+// ============================================================================
+// Program Definition (for IDL generation)
+// ============================================================================
+
+pub const Program = struct {
+    pub const id = PROGRAM_ID;
+    pub const name = "privacy_pool";
+    pub const version = "0.1.0";
+    pub const spec = "0.1.0";
+
+    /// Instruction definitions for IDL
+    pub const instructions = .{
+        idl.InstructionWithDocs(
+            "initialize",
+            InitializeAccounts,
+            InitializeArgs,
+            "Initialize a new SOL privacy pool with Merkle tree",
+        ),
+        idl.InstructionWithDocs(
+            "update_config",
+            UpdateConfigAccounts,
+            UpdateConfigArgs,
+            "Update global configuration (fees, limits)",
+        ),
+        idl.InstructionWithDocs(
+            "initialize_spl",
+            InitializeSplAccounts,
+            InitializeSplArgs,
+            "Initialize a new SPL Token privacy pool",
+        ),
+        idl.InstructionWithDocs(
+            "transact",
+            TransactAccounts,
+            TransactArgs,
+            "Execute a SOL transaction with ZK proof (deposit/withdraw/transfer)",
+        ),
+        idl.InstructionWithDocs(
+            "transact_spl",
+            TransactSplAccounts,
+            TransactArgs,
+            "Execute an SPL Token transaction with ZK proof",
+        ),
+    };
+
+    /// Account definitions for IDL
+    pub const accounts = .{
+        idl.AccountDefWithDocs("TreeAccount", TreeAccount, "Merkle tree account storing commitments"),
+        idl.AccountDefWithDocs("GlobalConfig", GlobalConfig, "Global configuration for fees"),
+        idl.AccountDefWithDocs("NullifierAccount", NullifierAccount, "Nullifier to prevent double-spending"),
+        idl.AccountDefWithDocs("TokenPoolAccount", TokenPoolAccount, "SPL Token pool configuration"),
+    };
+
+    /// Custom errors
+    pub const errors = enum(u32) {
+        InvalidProof = 6000,
+        InvalidRoot = 6001,
+        NullifierAlreadyUsed = 6002,
+        TreeFull = 6003,
+        DepositLimitExceeded = 6004,
+        InsufficientFunds = 6005,
+        Unauthorized = 6006,
+    };
+
+    /// Events
+    pub const events = .{
+        idl.EventDef("CommitmentData", struct {
+            index: u64,
+            commitment: [32]u8,
+        }),
+    };
+
+    /// Constants
+    pub const constants = .{
+        idl.ConstantDef("MERKLE_TREE_HEIGHT", u8, MERKLE_TREE_HEIGHT),
+        idl.ConstantDef("ROOT_HISTORY_SIZE", u64, ROOT_HISTORY_SIZE),
+        idl.ConstantDef("PROOF_SIZE", u64, PROOF_SIZE),
+        idl.ConstantDef("NR_PUBLIC_INPUTS", u64, NR_PUBLIC_INPUTS),
+        idl.ConstantDef("FEE_DENOMINATOR", u64, FEE_DENOMINATOR),
+    };
+};
 
 // ============================================================================
 // Program Entry

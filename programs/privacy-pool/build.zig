@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) void {
     _ = solana.buildProgram(b, program, target, optimize);
     b.installArtifact(program);
 
-    // Native tests (host target)
+    // Native tests (host target) - use solana-zig for host target too
     const host_sdk_dep = b.dependency("solana_program_sdk", .{
         .target = b.graph.host,
         .optimize = .Debug,
@@ -60,4 +60,26 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // ========================================
+    // IDL Generator (native target)
+    // ========================================
+
+    const idl_gen = b.addExecutable(.{
+        .name = "gen_idl",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/gen_idl.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    idl_gen.root_module.addImport("solana_program_sdk", host_sdk_mod);
+    idl_gen.root_module.addImport("sol_anchor_zig", host_anchor_mod);
+
+    // Run step to generate IDL
+    const run_idl = b.addRunArtifact(idl_gen);
+    run_idl.addArgs(&.{ "-o", "idl/privacy_pool.json" });
+
+    const idl_step = b.step("idl", "Generate IDL JSON");
+    idl_step.dependOn(&run_idl.step);
 }
