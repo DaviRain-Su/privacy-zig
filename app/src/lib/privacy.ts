@@ -1,7 +1,7 @@
 /**
  * Privacy Pool Client Library
  * 
- * Simple anonymous transfer: one action, complete privacy.
+ * Provides deposit, withdraw, and anonymous transfer functions.
  */
 
 import { 
@@ -15,6 +15,7 @@ import {
 } from '@solana/web3.js';
 import BN from 'bn.js';
 import { buildPoseidon } from 'circomlibjs';
+import { addNote, updateNote, Note } from './notes';
 
 // ============================================================================
 // Constants
@@ -39,12 +40,12 @@ export const POOL_CONFIG = {
 
 let poseidonInstance: any = null;
 
-async function initPoseidon(): Promise<void> {
+export async function initPoseidon(): Promise<void> {
   if (poseidonInstance) return;
   poseidonInstance = await buildPoseidon();
 }
 
-function poseidonHash(inputs: bigint[]): bigint {
+export function poseidonHash(inputs: bigint[]): bigint {
   if (!poseidonInstance) throw new Error('Poseidon not initialized');
   const hash = poseidonInstance(inputs);
   return poseidonInstance.F.toObject(hash);
@@ -70,11 +71,19 @@ function bytesToBigInt(bytes: Uint8Array): bigint {
   return BigInt('0x' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(''));
 }
 
-function generateBlinding(): bigint {
+function bigintToHex(n: bigint): string {
+  return n.toString(16).padStart(62, '0');
+}
+
+function hexToBigint(hex: string): bigint {
+  return BigInt('0x' + hex);
+}
+
+export function generateBlinding(): bigint {
   return bytesToBigInt(generateRandom31Bytes());
 }
 
-function generateKeypair(): { privkey: bigint; pubkey: bigint } {
+export function generateKeypair(): { privkey: bigint; pubkey: bigint } {
   const privkey = bytesToBigInt(generateRandom31Bytes());
   const pubkey = poseidonHash([privkey]);
   return { privkey, pubkey };
@@ -84,7 +93,7 @@ function generateKeypair(): { privkey: bigint; pubkey: bigint } {
 // Merkle Tree
 // ============================================================================
 
-class MerkleTree {
+export class MerkleTree {
   height: number;
   zeros: bigint[] = [];
   leaves: bigint[] = [];
@@ -212,7 +221,7 @@ async function serializePublicSignals(publicSignals: string[]): Promise<Buffer[]
 // Chain Interaction
 // ============================================================================
 
-async function fetchCommitmentsFromChain(connection: Connection): Promise<bigint[]> {
+export async function fetchCommitmentsFromChain(connection: Connection): Promise<bigint[]> {
   const signatures = await connection.getSignaturesForAddress(POOL_CONFIG.treeAccount, { limit: 1000 });
   const commitments: bigint[] = [];
   
@@ -234,7 +243,6 @@ async function fetchCommitmentsFromChain(connection: Connection): Promise<bigint
         
         const data = Buffer.from(ix.data);
         if (data.length >= 424 && data[0] === TRANSACT_DISCRIMINATOR[0]) {
-          // Extract commitments from instruction data (offsets 360-392 and 392-424)
           commitments.push(
             BigInt('0x' + data.slice(360, 392).toString('hex')),
             BigInt('0x' + data.slice(392, 424).toString('hex'))
@@ -247,14 +255,14 @@ async function fetchCommitmentsFromChain(connection: Connection): Promise<bigint
   return commitments;
 }
 
-async function getCurrentLeafIndex(connection: Connection): Promise<number> {
+export async function getCurrentLeafIndex(connection: Connection): Promise<number> {
   const treeInfo = await connection.getAccountInfo(POOL_CONFIG.treeAccount);
   if (!treeInfo) throw new Error('Tree account not found');
   return Number(treeInfo.data.readBigUInt64LE(40));
 }
 
 // ============================================================================
-// Anonymous Transfer - Main Function
+// Progress Types
 // ============================================================================
 
 export interface TransferProgress {
@@ -262,60 +270,45 @@ export interface TransferProgress {
   message: string;
 }
 
-export interface TransferResult {
+export interface DepositResult {
   success: boolean;
-  depositSignature?: string;
-  withdrawSignature?: string;
+  note?: Note;
+  signature?: string;
   error?: string;
 }
 
-/**
- * Anonymous Transfer - One Action Privacy Transfer
- * 
- * This function:
- * 1. Deposits SOL to privacy pool (with ZK proof)
- * 2. Immediately withdraws to recipient (with ZK proof)
- * 
- * Result: No on-chain link between sender and recipient!
- */
-export async function anonymousTransfer(
+export interface WithdrawResult {
+  success: boolean;
+  signature?: string;
+  error?: string;
+}
+
+// ============================================================================
+// Deposit Function
+// ============================================================================
+
+export async function deposit(
   connection: Connection,
   senderPubkey: PublicKey,
-  recipientAddress: string,
   amountLamports: number,
   sendTransaction: (tx: Transaction, connection: Connection) => Promise<string>,
-  onProgress?: (progress: TransferProgress) => void,
-): Promise<TransferResult> {
+  onProgress?: (msg: string) => void,
+): Promise<DepositResult> {
   try {
-    const report = (step: TransferProgress['step'], message: string) => {
-      onProgress?.({ step, message });
-    };
-    
-    report('init', 'Initializing privacy transfer...');
-    
-    // Initialize Poseidon
+    onProgress?.('Initializing...');
     await initPoseidon();
     
     const solMintAddress = 1n;
-    const recipientPubkey = new PublicKey(recipientAddress);
-    
-    // Generate keypair for UTXOs
     const utxoKeypair = generateKeypair();
-    
-    // ========== Fetch current state ==========
     const currentLeafIndex = await getCurrentLeafIndex(connection);
     
-    // Build empty tree (for deposit with zero-value inputs, any root works)
+    // Build empty tree for root
     const tree = new MerkleTree();
     const emptyRoot = tree.zeros[MERKLE_TREE_HEIGHT];
     
-    console.log('Current leaf index:', currentLeafIndex);
-    console.log('Empty root:', emptyRoot.toString());
+    onProgress?.('Generating proof...');
     
-    // ========== STEP 1: Prepare Deposit ==========
-    report('deposit-proof', 'Generating deposit proof...');
-    
-    // Dummy inputs (zero value) - these don't need to be in tree
+    // Dummy inputs
     const dummyBlinding1 = generateBlinding();
     const dummyBlinding2 = generateBlinding();
     const dummyCommitment1 = poseidonHash([0n, utxoKeypair.pubkey, dummyBlinding1, solMintAddress]);
@@ -325,13 +318,12 @@ export async function anonymousTransfer(
     const inputNullifier1 = poseidonHash([dummyCommitment1, 0n, dummySig1]);
     const inputNullifier2 = poseidonHash([dummyCommitment2, 0n, dummySig2]);
     
-    // Output commitments (deposit amount)
+    // Output commitment (the one we'll save)
     const outBlinding1 = generateBlinding();
     const outBlinding2 = generateBlinding();
     const outputCommitment1 = poseidonHash([BigInt(amountLamports), utxoKeypair.pubkey, outBlinding1, solMintAddress]);
     const outputCommitment2 = poseidonHash([0n, utxoKeypair.pubkey, outBlinding2, solMintAddress]);
     
-    // For deposit with zero-value inputs, use empty root (circuit accepts any root when inputs are zero)
     const depositPublicAmount = new BN(amountLamports).add(FIELD_SIZE).mod(FIELD_SIZE);
     const senderNum = BigInt('0x' + senderPubkey.toBuffer().toString('hex').slice(0, 16));
     const depositExtDataHash = poseidonHash([senderNum, BigInt(amountLamports)]);
@@ -354,48 +346,32 @@ export async function anonymousTransfer(
       outBlinding: [outBlinding1.toString(), outBlinding2.toString()],
     };
     
-    console.log('Generating deposit proof...');
-    const depositProofResult = await generateProof(depositInput);
-    console.log('Deposit proof generated!');
-    console.log('Public signals:', depositProofResult.publicSignals);
+    const proofResult = await generateProof(depositInput);
+    const proofBuffer = await serializeProof(proofResult.proof);
+    const publicInputs = await serializePublicSignals(proofResult.publicSignals);
     
-    const depositProofBuffer = await serializeProof(depositProofResult.proof);
-    const depositPublicInputs = await serializePublicSignals(depositProofResult.publicSignals);
-    
-    // Build deposit instruction
+    // Build instruction
     const depositData = Buffer.alloc(8 + 256 + 32 * 5 + 8 + 32);
     let offset = 0;
     Buffer.from(TRANSACT_DISCRIMINATOR).copy(depositData, offset); offset += 8;
-    depositProofBuffer.copy(depositData, offset); offset += 256;
-    depositPublicInputs[0].copy(depositData, offset); offset += 32; // root
-    depositPublicInputs[3].copy(depositData, offset); offset += 32; // nullifier1
-    depositPublicInputs[4].copy(depositData, offset); offset += 32; // nullifier2
-    depositPublicInputs[5].copy(depositData, offset); offset += 32; // commitment1
-    depositPublicInputs[6].copy(depositData, offset); offset += 32; // commitment2
+    proofBuffer.copy(depositData, offset); offset += 256;
+    publicInputs[0].copy(depositData, offset); offset += 32;
+    publicInputs[3].copy(depositData, offset); offset += 32;
+    publicInputs[4].copy(depositData, offset); offset += 32;
+    publicInputs[5].copy(depositData, offset); offset += 32;
+    publicInputs[6].copy(depositData, offset); offset += 32;
     depositData.writeBigInt64LE(BigInt(amountLamports), offset); offset += 8;
-    depositPublicInputs[2].copy(depositData, offset); // extDataHash
+    publicInputs[2].copy(depositData, offset);
     
-    const [depositNull1PDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from('nullifier'), depositPublicInputs[3]],
-      PROGRAM_ID
-    );
-    const [depositNull2PDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from('nullifier'), depositPublicInputs[4]],
-      PROGRAM_ID
-    );
-    const [poolVault] = PublicKey.findProgramAddressSync(
-      [Buffer.from('pool_vault')],
-      PROGRAM_ID
-    );
-    
-    console.log('Nullifier1 PDA:', depositNull1PDA.toBase58());
-    console.log('Nullifier2 PDA:', depositNull2PDA.toBase58());
+    const [null1PDA] = PublicKey.findProgramAddressSync([Buffer.from('nullifier'), publicInputs[3]], PROGRAM_ID);
+    const [null2PDA] = PublicKey.findProgramAddressSync([Buffer.from('nullifier'), publicInputs[4]], PROGRAM_ID);
+    const [poolVault] = PublicKey.findProgramAddressSync([Buffer.from('pool_vault')], PROGRAM_ID);
     
     const depositIx = new TransactionInstruction({
       keys: [
         { pubkey: POOL_CONFIG.treeAccount, isSigner: false, isWritable: true },
-        { pubkey: depositNull1PDA, isSigner: false, isWritable: true },
-        { pubkey: depositNull2PDA, isSigner: false, isWritable: true },
+        { pubkey: null1PDA, isSigner: false, isWritable: true },
+        { pubkey: null2PDA, isSigner: false, isWritable: true },
         { pubkey: POOL_CONFIG.globalConfig, isSigner: false, isWritable: false },
         { pubkey: poolVault, isSigner: false, isWritable: true },
         { pubkey: senderPubkey, isSigner: true, isWritable: true },
@@ -406,131 +382,157 @@ export async function anonymousTransfer(
       data: depositData,
     });
     
-    // Send deposit transaction
-    report('deposit-tx', 'Sending deposit transaction...');
+    onProgress?.('Sending transaction...');
     
-    const depositTx = new Transaction()
+    const tx = new Transaction()
       .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }))
       .add(depositIx);
     
-    const { blockhash: depositBlockhash, lastValidBlockHeight: depositHeight } = 
-      await connection.getLatestBlockhash();
-    depositTx.recentBlockhash = depositBlockhash;
-    depositTx.feePayer = senderPubkey;
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = senderPubkey;
     
-    const depositSig = await sendTransaction(depositTx, connection);
-    console.log('Deposit tx sent:', depositSig);
+    const signature = await sendTransaction(tx, connection);
     
-    await connection.confirmTransaction({
-      signature: depositSig,
-      blockhash: depositBlockhash,
-      lastValidBlockHeight: depositHeight,
+    onProgress?.('Confirming...');
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight });
+    
+    // Save note to localStorage
+    const note = addNote({
+      amount: amountLamports,
+      privkey: bigintToHex(utxoKeypair.privkey),
+      pubkey: utxoKeypair.pubkey.toString(),
+      blinding: outBlinding1.toString(),
+      commitment: outputCommitment1.toString(),
+      leafIndex: currentLeafIndex, // Will be updated when we verify
+      status: 'deposited',
+      depositTxSig: signature,
     });
-    console.log('Deposit confirmed!');
     
-    // ========== STEP 2: Prepare Withdrawal ==========
-    report('withdraw-proof', 'Generating withdrawal proof...');
+    return { success: true, note, signature };
     
-    // Wait for the deposit to be indexed
-    await new Promise(r => setTimeout(r, 3000));
+  } catch (error: any) {
+    console.error('Deposit error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// ============================================================================
+// Withdraw Function
+// ============================================================================
+
+export async function withdraw(
+  connection: Connection,
+  senderPubkey: PublicKey,
+  recipientAddress: string,
+  note: Note,
+  sendTransaction: (tx: Transaction, connection: Connection) => Promise<string>,
+  onProgress?: (msg: string) => void,
+): Promise<WithdrawResult> {
+  try {
+    onProgress?.('Initializing...');
+    await initPoseidon();
     
-    // Fetch updated commitments
-    const newCommitments = await fetchCommitmentsFromChain(connection);
-    const withdrawTree = new MerkleTree();
-    for (const c of newCommitments) {
-      withdrawTree.insert(c);
+    const solMintAddress = 1n;
+    const recipientPubkey = new PublicKey(recipientAddress);
+    const amountLamports = note.amount;
+    
+    // Restore keypair from note
+    const privkey = hexToBigint(note.privkey);
+    const pubkey = BigInt(note.pubkey);
+    const blinding = BigInt(note.blinding);
+    const commitment = BigInt(note.commitment);
+    
+    onProgress?.('Fetching Merkle tree...');
+    
+    // Fetch commitments and build tree
+    const commitments = await fetchCommitmentsFromChain(connection);
+    const tree = new MerkleTree();
+    for (const c of commitments) {
+      tree.insert(c);
     }
     
-    // Find our commitment
-    let leafIndex = withdrawTree.findLeafIndex(outputCommitment1);
+    // Find leaf index
+    let leafIndex = tree.findLeafIndex(commitment);
     if (leafIndex === -1) {
-      // If not found, add it manually (use expected index)
-      leafIndex = currentLeafIndex;
-      withdrawTree.insert(outputCommitment1);
-      withdrawTree.insert(outputCommitment2);
+      // Use stored index as fallback
+      leafIndex = note.leafIndex;
+      if (leafIndex === -1) {
+        return { success: false, error: 'Commitment not found in tree' };
+      }
     }
     
-    console.log('Leaf index for withdrawal:', leafIndex);
+    const { pathElements } = tree.getPath(leafIndex);
+    const root = tree.getRoot();
     
-    const { pathElements, pathIndices } = withdrawTree.getPath(leafIndex);
-    const withdrawRoot = withdrawTree.getRoot();
+    onProgress?.('Generating proof...');
     
-    console.log('Withdraw root:', withdrawRoot.toString());
-    
-    // Compute nullifier for withdrawal
-    const signature = poseidonHash([utxoKeypair.privkey, outputCommitment1, BigInt(leafIndex)]);
-    const withdrawNullifier = poseidonHash([outputCommitment1, BigInt(leafIndex), signature]);
+    // Compute nullifier
+    const sig = poseidonHash([privkey, commitment, BigInt(leafIndex)]);
+    const nullifier = poseidonHash([commitment, BigInt(leafIndex), sig]);
     
     // Dummy second input
-    const withdrawDummyBlinding = generateBlinding();
-    const withdrawDummyCommitment = poseidonHash([0n, utxoKeypair.pubkey, withdrawDummyBlinding, solMintAddress]);
-    const withdrawDummySig = poseidonHash([utxoKeypair.privkey, withdrawDummyCommitment, 0n]);
-    const withdrawDummyNullifier = poseidonHash([withdrawDummyCommitment, 0n, withdrawDummySig]);
+    const dummyBlinding = generateBlinding();
+    const dummyCommitment = poseidonHash([0n, pubkey, dummyBlinding, solMintAddress]);
+    const dummySig = poseidonHash([privkey, dummyCommitment, 0n]);
+    const dummyNullifier = poseidonHash([dummyCommitment, 0n, dummySig]);
     
-    // Zero outputs (full withdrawal)
-    const withdrawOutBlinding1 = generateBlinding();
-    const withdrawOutBlinding2 = generateBlinding();
-    const withdrawOutputCommitment1 = poseidonHash([0n, utxoKeypair.pubkey, withdrawOutBlinding1, solMintAddress]);
-    const withdrawOutputCommitment2 = poseidonHash([0n, utxoKeypair.pubkey, withdrawOutBlinding2, solMintAddress]);
+    // Zero outputs
+    const outBlinding1 = generateBlinding();
+    const outBlinding2 = generateBlinding();
+    const outputCommitment1 = poseidonHash([0n, pubkey, outBlinding1, solMintAddress]);
+    const outputCommitment2 = poseidonHash([0n, pubkey, outBlinding2, solMintAddress]);
     
     const withdrawPublicAmount = new BN(amountLamports).neg().add(FIELD_SIZE).mod(FIELD_SIZE);
     const recipientNum = BigInt('0x' + recipientPubkey.toBuffer().slice(0, 8).toString('hex'));
-    const withdrawExtDataHash = poseidonHash([recipientNum, BigInt(amountLamports)]);
+    const extDataHash = poseidonHash([recipientNum, BigInt(amountLamports)]);
     
     const withdrawInput = {
-      root: withdrawRoot.toString(),
+      root: root.toString(),
       publicAmount: withdrawPublicAmount.toString(),
-      extDataHash: withdrawExtDataHash.toString(),
+      extDataHash: extDataHash.toString(),
       mintAddress: solMintAddress.toString(),
-      inputNullifier: [withdrawNullifier.toString(), withdrawDummyNullifier.toString()],
+      inputNullifier: [nullifier.toString(), dummyNullifier.toString()],
       inAmount: [amountLamports.toString(), '0'],
-      inPrivateKey: [utxoKeypair.privkey.toString(), utxoKeypair.privkey.toString()],
-      inBlinding: [outBlinding1.toString(), withdrawDummyBlinding.toString()],
+      inPrivateKey: [privkey.toString(), privkey.toString()],
+      inBlinding: [blinding.toString(), dummyBlinding.toString()],
       inPathIndices: [leafIndex, 0],
       inPathElements: [
         pathElements.map(e => e.toString()),
         new Array(MERKLE_TREE_HEIGHT).fill('0'),
       ],
-      outputCommitment: [withdrawOutputCommitment1.toString(), withdrawOutputCommitment2.toString()],
+      outputCommitment: [outputCommitment1.toString(), outputCommitment2.toString()],
       outAmount: ['0', '0'],
-      outPubkey: [utxoKeypair.pubkey.toString(), utxoKeypair.pubkey.toString()],
-      outBlinding: [withdrawOutBlinding1.toString(), withdrawOutBlinding2.toString()],
+      outPubkey: [pubkey.toString(), pubkey.toString()],
+      outBlinding: [outBlinding1.toString(), outBlinding2.toString()],
     };
     
-    console.log('Generating withdraw proof...');
-    const withdrawProofResult = await generateProof(withdrawInput);
-    console.log('Withdraw proof generated!');
+    const proofResult = await generateProof(withdrawInput);
+    const proofBuffer = await serializeProof(proofResult.proof);
+    const publicInputs = await serializePublicSignals(proofResult.publicSignals);
     
-    const withdrawProofBuffer = await serializeProof(withdrawProofResult.proof);
-    const withdrawPublicInputs = await serializePublicSignals(withdrawProofResult.publicSignals);
-    
-    // Build withdraw instruction
+    // Build instruction
     const withdrawData = Buffer.alloc(8 + 256 + 32 * 5 + 8 + 32);
-    offset = 0;
+    let offset = 0;
     Buffer.from(TRANSACT_DISCRIMINATOR).copy(withdrawData, offset); offset += 8;
-    withdrawProofBuffer.copy(withdrawData, offset); offset += 256;
-    withdrawPublicInputs[0].copy(withdrawData, offset); offset += 32;
-    withdrawPublicInputs[3].copy(withdrawData, offset); offset += 32;
-    withdrawPublicInputs[4].copy(withdrawData, offset); offset += 32;
-    withdrawPublicInputs[5].copy(withdrawData, offset); offset += 32;
-    withdrawPublicInputs[6].copy(withdrawData, offset); offset += 32;
+    proofBuffer.copy(withdrawData, offset); offset += 256;
+    publicInputs[0].copy(withdrawData, offset); offset += 32;
+    publicInputs[3].copy(withdrawData, offset); offset += 32;
+    publicInputs[4].copy(withdrawData, offset); offset += 32;
+    publicInputs[5].copy(withdrawData, offset); offset += 32;
+    publicInputs[6].copy(withdrawData, offset); offset += 32;
     withdrawData.writeBigInt64LE(BigInt(-amountLamports), offset); offset += 8;
-    withdrawPublicInputs[2].copy(withdrawData, offset);
+    publicInputs[2].copy(withdrawData, offset);
     
-    const [withdrawNull1PDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from('nullifier'), withdrawPublicInputs[3]],
-      PROGRAM_ID
-    );
-    const [withdrawNull2PDA] = PublicKey.findProgramAddressSync(
-      [Buffer.from('nullifier'), withdrawPublicInputs[4]],
-      PROGRAM_ID
-    );
+    const [null1PDA] = PublicKey.findProgramAddressSync([Buffer.from('nullifier'), publicInputs[3]], PROGRAM_ID);
+    const [null2PDA] = PublicKey.findProgramAddressSync([Buffer.from('nullifier'), publicInputs[4]], PROGRAM_ID);
+    const [poolVault] = PublicKey.findProgramAddressSync([Buffer.from('pool_vault')], PROGRAM_ID);
     
     const withdrawIx = new TransactionInstruction({
       keys: [
         { pubkey: POOL_CONFIG.treeAccount, isSigner: false, isWritable: true },
-        { pubkey: withdrawNull1PDA, isSigner: false, isWritable: true },
-        { pubkey: withdrawNull2PDA, isSigner: false, isWritable: true },
+        { pubkey: null1PDA, isSigner: false, isWritable: true },
+        { pubkey: null2PDA, isSigner: false, isWritable: true },
         { pubkey: POOL_CONFIG.globalConfig, isSigner: false, isWritable: false },
         { pubkey: poolVault, isSigner: false, isWritable: true },
         { pubkey: senderPubkey, isSigner: true, isWritable: true },
@@ -541,42 +543,29 @@ export async function anonymousTransfer(
       data: withdrawData,
     });
     
-    // Send withdraw transaction
-    report('withdraw-tx', 'Sending withdrawal transaction...');
+    onProgress?.('Sending transaction...');
     
-    const withdrawTx = new Transaction()
+    const tx = new Transaction()
       .add(ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }))
       .add(withdrawIx);
     
-    const { blockhash: withdrawBlockhash, lastValidBlockHeight: withdrawHeight } = 
-      await connection.getLatestBlockhash();
-    withdrawTx.recentBlockhash = withdrawBlockhash;
-    withdrawTx.feePayer = senderPubkey;
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    tx.recentBlockhash = blockhash;
+    tx.feePayer = senderPubkey;
     
-    const withdrawSig = await sendTransaction(withdrawTx, connection);
-    console.log('Withdraw tx sent:', withdrawSig);
+    const signature = await sendTransaction(tx, connection);
     
-    await connection.confirmTransaction({
-      signature: withdrawSig,
-      blockhash: withdrawBlockhash,
-      lastValidBlockHeight: withdrawHeight,
-    });
-    console.log('Withdraw confirmed!');
+    onProgress?.('Confirming...');
+    await connection.confirmTransaction({ signature, blockhash, lastValidBlockHeight });
     
-    report('done', 'Transfer complete!');
+    // Update note status
+    updateNote(note.id, { status: 'withdrawn', withdrawTxSig: signature });
     
-    return {
-      success: true,
-      depositSignature: depositSig,
-      withdrawSignature: withdrawSig,
-    };
+    return { success: true, signature };
     
   } catch (error: any) {
-    console.error('Transfer error:', error);
-    return {
-      success: false,
-      error: error.message || 'Transfer failed',
-    };
+    console.error('Withdraw error:', error);
+    return { success: false, error: error.message };
   }
 }
 
@@ -588,10 +577,7 @@ export async function getPoolStats(connection: Connection): Promise<{
   totalDeposits: number;
   poolBalance: number;
 }> {
-  const [poolVault] = PublicKey.findProgramAddressSync(
-    [Buffer.from('pool_vault')],
-    PROGRAM_ID
-  );
+  const [poolVault] = PublicKey.findProgramAddressSync([Buffer.from('pool_vault')], PROGRAM_ID);
   
   const [treeInfo, vaultBalance] = await Promise.all([
     connection.getAccountInfo(POOL_CONFIG.treeAccount),
