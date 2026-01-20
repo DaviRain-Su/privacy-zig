@@ -58,6 +58,10 @@ enum Commands {
         /// Amount in SOL
         #[arg(short, long)]
         amount: f64,
+
+        /// Skip confirmation prompt
+        #[arg(short, long, default_value_t = false)]
+        yes: bool,
     },
 
     /// Withdraw SOL from privacy pool
@@ -69,6 +73,10 @@ enum Commands {
         /// Note ID to use (optional, will prompt if not provided)
         #[arg(short, long)]
         note_id: Option<String>,
+
+        /// Skip confirmation prompt
+        #[arg(short, long, default_value_t = false)]
+        yes: bool,
     },
 
     /// One-click anonymous transfer (deposit + withdraw)
@@ -80,6 +88,10 @@ enum Commands {
         /// Recipient address
         #[arg(short, long)]
         recipient: String,
+
+        /// Skip confirmation prompt
+        #[arg(short, long, default_value_t = false)]
+        yes: bool,
     },
 
     /// List all notes
@@ -153,14 +165,14 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Stats => cmd_stats(&client).await?,
-        Commands::Deposit { amount } => {
-            cmd_deposit(&client, &keypair, amount, &cli.artifacts).await?
+        Commands::Deposit { amount, yes } => {
+            cmd_deposit(&client, &keypair, amount, &cli.artifacts, yes).await?
         }
-        Commands::Withdraw { recipient, note_id } => {
-            cmd_withdraw(&client, &keypair, &recipient, note_id, &cli.artifacts).await?
+        Commands::Withdraw { recipient, note_id, yes } => {
+            cmd_withdraw(&client, &keypair, &recipient, note_id, &cli.artifacts, yes).await?
         }
-        Commands::Transfer { amount, recipient } => {
-            cmd_transfer(&client, &keypair, amount, &recipient, &cli.artifacts).await?
+        Commands::Transfer { amount, recipient, yes } => {
+            cmd_transfer(&client, &keypair, amount, &recipient, &cli.artifacts, yes).await?
         }
         Commands::Notes { action } => cmd_notes(action).await?,
         Commands::Info => cmd_info(&client, &keypair).await?,
@@ -205,6 +217,7 @@ async fn cmd_deposit(
     keypair: &Keypair,
     amount: f64,
     artifacts_path: &str,
+    skip_confirm: bool,
 ) -> Result<()> {
     let lamports = (amount * 1_000_000_000.0) as u64;
 
@@ -224,13 +237,15 @@ async fn cmd_deposit(
         ));
     }
 
-    if !Confirm::new()
-        .with_prompt("Proceed with deposit?")
-        .default(true)
-        .interact()?
-    {
-        println!("{}", style("Cancelled").red());
-        return Ok(());
+    if !skip_confirm {
+        if !Confirm::new()
+            .with_prompt("Proceed with deposit?")
+            .default(true)
+            .interact()?
+        {
+            println!("{}", style("Cancelled").red());
+            return Ok(());
+        }
     }
 
     let pb = ProgressBar::new_spinner();
@@ -350,6 +365,7 @@ async fn cmd_withdraw(
     recipient: &str,
     note_id: Option<String>,
     artifacts_path: &str,
+    skip_confirm: bool,
 ) -> Result<()> {
     let recipient_pubkey = Pubkey::from_str(recipient)
         .map_err(|_| anyhow!("Invalid recipient address"))?;
@@ -368,6 +384,9 @@ async fn cmd_withdraw(
             .iter()
             .find(|n| n.id == id)
             .ok_or_else(|| anyhow!("Note {} not found", id))?
+    } else if skip_confirm {
+        // When skipping confirm, use latest note
+        available_notes.last().ok_or_else(|| anyhow!("No note found"))?
     } else {
         let items: Vec<String> = available_notes
             .iter()
@@ -391,13 +410,15 @@ async fn cmd_withdraw(
     println!("  Note ID:    {}", style(&note.id).dim());
     println!();
 
-    if !Confirm::new()
-        .with_prompt("Proceed with withdrawal?")
-        .default(true)
-        .interact()?
-    {
-        println!("{}", style("Cancelled").red());
-        return Ok(());
+    if !skip_confirm {
+        if !Confirm::new()
+            .with_prompt("Proceed with withdrawal?")
+            .default(true)
+            .interact()?
+        {
+            println!("{}", style("Cancelled").red());
+            return Ok(());
+        }
     }
 
     let pb = ProgressBar::new_spinner();
@@ -510,8 +531,9 @@ async fn cmd_transfer(
     amount: f64,
     recipient: &str,
     artifacts_path: &str,
+    skip_confirm: bool,
 ) -> Result<()> {
-    let recipient_pubkey = Pubkey::from_str(recipient)
+    let _recipient_pubkey = Pubkey::from_str(recipient)
         .map_err(|_| anyhow!("Invalid recipient address"))?;
 
     println!("{}", style("⚡ Anonymous Transfer").bold());
@@ -524,19 +546,21 @@ async fn cmd_transfer(
     println!("{}", style("  No on-chain link between you and recipient!").dim());
     println!();
 
-    if !Confirm::new()
-        .with_prompt("Proceed with anonymous transfer?")
-        .default(true)
-        .interact()?
-    {
-        println!("{}", style("Cancelled").red());
-        return Ok(());
+    if !skip_confirm {
+        if !Confirm::new()
+            .with_prompt("Proceed with anonymous transfer?")
+            .default(true)
+            .interact()?
+        {
+            println!("{}", style("Cancelled").red());
+            return Ok(());
+        }
     }
 
     // Step 1: Deposit
     println!();
     println!("{}", style("Step 1/2: Depositing...").bold());
-    cmd_deposit(client, keypair, amount, artifacts_path).await?;
+    cmd_deposit(client, keypair, amount, artifacts_path, true).await?;
 
     // Small delay for confirmation
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -560,6 +584,7 @@ async fn cmd_transfer(
         recipient,
         Some(latest_note.id.clone()),
         artifacts_path,
+        true,
     )
     .await?;
 
