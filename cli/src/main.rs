@@ -562,8 +562,9 @@ async fn cmd_transfer(
     println!("{}", style("Step 1/2: Depositing...").bold());
     cmd_deposit(client, keypair, amount, artifacts_path, true).await?;
 
-    // Small delay for confirmation
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Wait for transaction confirmation before querying tree
+    println!("{}", style("Waiting for confirmation...").dim());
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
     // Step 2: Withdraw to recipient
     println!();

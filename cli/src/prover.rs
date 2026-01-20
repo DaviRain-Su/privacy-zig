@@ -124,20 +124,47 @@ impl PrivacyProver {
         tree: &MerkleTree,
         recipient_pubkey_bytes: &[u8; 32],
     ) -> Result<TransactProofData> {
+        use light_poseidon::{Poseidon, PoseidonHasher};
+        use crate::crypto::{str_to_fr, random_fr, fr_to_str};
+        
         let amount = utxo.amount;
         let root = tree.root();
         let (path_elements, _path_indices) = tree.get_path(leaf_index);
 
-        // Compute nullifier
+        // Get utxo owner's keys
+        let privkey = str_to_fr(&utxo.privkey)?;
+        let pubkey = str_to_fr(&utxo.pubkey)?;
+        let mint = Fr::from(1u64); // SOL mint
+        
+        // Compute nullifier1 for real input
         let nullifier1 = utxo.compute_nullifier(leaf_index)?;
         
-        // Dummy second input
-        let dummy_utxo = Utxo::new(0)?;
-        let nullifier2 = dummy_utxo.compute_nullifier(0)?;
+        // Dummy second input - uses SAME privkey/pubkey but different blinding
+        let dummy_blinding = random_fr();
+        let dummy_commitment = {
+            let mut h = Poseidon::<Fr>::new_circom(4).map_err(|e| anyhow!("Poseidon init failed: {:?}", e))?;
+            h.hash(&[Fr::from(0u64), pubkey, dummy_blinding, mint]).map_err(|e| anyhow!("Hash failed: {:?}", e))?
+        };
+        let dummy_sig = {
+            let mut h = Poseidon::<Fr>::new_circom(3).map_err(|e| anyhow!("Poseidon init failed: {:?}", e))?;
+            h.hash(&[privkey, dummy_commitment, Fr::from(0u64)]).map_err(|e| anyhow!("Hash failed: {:?}", e))?
+        };
+        let nullifier2 = {
+            let mut h = Poseidon::<Fr>::new_circom(3).map_err(|e| anyhow!("Poseidon init failed: {:?}", e))?;
+            h.hash(&[dummy_commitment, Fr::from(0u64), dummy_sig]).map_err(|e| anyhow!("Hash failed: {:?}", e))?
+        };
 
-        // Zero outputs
-        let out_utxo1 = Utxo::new(0)?;
-        let out_utxo2 = Utxo::new(0)?;
+        // Output commitments (both zero amount, same pubkey)
+        let out_blinding1 = random_fr();
+        let out_blinding2 = random_fr();
+        let out_commitment1 = {
+            let mut h = Poseidon::<Fr>::new_circom(4).map_err(|e| anyhow!("Poseidon init failed: {:?}", e))?;
+            h.hash(&[Fr::from(0u64), pubkey, out_blinding1, mint]).map_err(|e| anyhow!("Hash failed: {:?}", e))?
+        };
+        let out_commitment2 = {
+            let mut h = Poseidon::<Fr>::new_circom(4).map_err(|e| anyhow!("Poseidon init failed: {:?}", e))?;
+            h.hash(&[Fr::from(0u64), pubkey, out_blinding2, mint]).map_err(|e| anyhow!("Hash failed: {:?}", e))?
+        };
 
         // Public amount (negative for withdrawal, represented in field)
         let field_size = num_bigint::BigUint::parse_bytes(
@@ -165,13 +192,14 @@ impl PrivacyProver {
             fr_to_bigint(&nullifier2),
         ]);
         inputs.insert("inAmount".to_string(), vec![BigInt::from(amount), BigInt::from(0)]);
+        // NOTE: Both inputs use the same private key (utxo owner)
         inputs.insert("inPrivateKey".to_string(), vec![
             str_to_bigint(&utxo.privkey)?,
-            str_to_bigint(&dummy_utxo.privkey)?,
+            str_to_bigint(&utxo.privkey)?,  // Same privkey for dummy input
         ]);
         inputs.insert("inBlinding".to_string(), vec![
             str_to_bigint(&utxo.blinding)?,
-            str_to_bigint(&dummy_utxo.blinding)?,
+            fr_to_bigint(&dummy_blinding),
         ]);
         inputs.insert("inPathIndices".to_string(), vec![
             BigInt::from(leaf_index as u64),
@@ -179,17 +207,18 @@ impl PrivacyProver {
         ]);
         inputs.insert("inPathElements".to_string(), [path_bigint, zero_path].concat());
         inputs.insert("outputCommitment".to_string(), vec![
-            str_to_bigint(&out_utxo1.commitment)?,
-            str_to_bigint(&out_utxo2.commitment)?,
+            fr_to_bigint(&out_commitment1),
+            fr_to_bigint(&out_commitment2),
         ]);
         inputs.insert("outAmount".to_string(), vec![BigInt::from(0), BigInt::from(0)]);
+        // NOTE: Both outputs use the same pubkey (utxo owner)
         inputs.insert("outPubkey".to_string(), vec![
             str_to_bigint(&utxo.pubkey)?,
-            str_to_bigint(&out_utxo2.pubkey)?,
+            str_to_bigint(&utxo.pubkey)?,  // Same pubkey for both outputs
         ]);
         inputs.insert("outBlinding".to_string(), vec![
-            str_to_bigint(&out_utxo1.blinding)?,
-            str_to_bigint(&out_utxo2.blinding)?,
+            fr_to_bigint(&out_blinding1),
+            fr_to_bigint(&out_blinding2),
         ]);
 
         let (proof, public_signals) = self.generate_proof(inputs)?;
