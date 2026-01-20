@@ -5,10 +5,27 @@
 ## Current Status
 
 **privacy-zig** is a working anonymous transfer system on Solana Testnet:
-- ✅ On-chain Zig program (57 KB, ~160K CU)
+- ✅ On-chain Zig program (86 KB, ~160K CU deposit)
 - ✅ Next.js DApp with wallet integration
 - ✅ ZK proof generation in browser
 - ✅ Privacy Cash circuit compatibility
+- ✅ Benchmark comparison completed
+
+## 📊 Benchmark Results (Actual Data)
+
+| Metric | privacy-zig | Privacy Cash | Improvement |
+|--------|-------------|--------------|-------------|
+| **Program Size** | **86 KB** | 484 KB | **5.7x smaller** ✅ |
+| **Deposit CU** | ~163K | ~163K* | Same |
+| **Withdraw CU** | ~929K | ~929K* | Same |
+| **Framework Overhead** | **5-18 CU** | ~150 CU | **8-30x less** ✅ |
+| **Deployment Rent** | **~0.6 SOL** | ~3.4 SOL | **Saves 2.8 SOL** ✅ |
+
+*\* CU is same because both use identical circuits and syscalls*
+
+See [BENCHMARK.md](./BENCHMARK.md) for detailed analysis.
+
+---
 
 ## Hackathon Tracks
 
@@ -17,6 +34,8 @@
 | **Privacy Tooling** | $15,000 | ⭐⭐⭐⭐⭐ | Best fit - we're building dev tools |
 | Private Payments | $15,000 | ⭐⭐⭐ | Already implemented but not innovative enough |
 | Open Track | $18,000 | ⭐⭐⭐ | Supported by Light Protocol |
+
+---
 
 ## Sponsor Bounties
 
@@ -32,9 +51,11 @@ We use their circuits! Position as "High-performance Zig implementation".
 
 **Our advantage**:
 - Same circuits (transaction2.circom)
-- 10x lower CU overhead vs Anchor
-- 2x smaller program size
+- 5.7x smaller program size
+- 8-30x less framework overhead
+- Saves 2.8 SOL deployment rent
 - Drop-in replacement
+- Complete DApp included
 
 **Resources**:
 - GitHub: https://github.com/Privacy-Cash/privacy-cash
@@ -144,24 +165,39 @@ Educate users about privacy.
 
 ## Recommended Strategy
 
-### Option A: Privacy Cash Bounty ($6,000) - EASIEST
+### Option A: Privacy Cash Bounty ($6,000) - EASIEST ✅ RECOMMENDED
 
 **Positioning**: "High-performance Zig implementation of Privacy Cash"
 
 **What to highlight**:
 ```
-| Metric | Privacy Cash (Rust) | privacy-zig |
-|--------|---------------------|-------------|
-| Program size | ~100+ KB | 57 KB |
-| Transaction CU | ~200K+ | ~160K |
-| Framework overhead | ~150 CU | ~5-18 CU |
+┌─────────────────────┬──────────────┬──────────────┬─────────────┐
+│ Metric              │ privacy-zig  │ Privacy Cash │ Improvement │
+├─────────────────────┼──────────────┼──────────────┼─────────────┤
+│ Program Size        │      86 KB   │     484 KB   │ 5.7x smaller│
+│ Framework Overhead  │    5-18 CU   │    ~150 CU   │ 8-30x less  │
+│ Deployment Rent     │   ~0.6 SOL   │   ~3.4 SOL   │ Saves 2.8   │
+│ Circuit Compatible  │      ✅      │      ✅      │ Same        │
+│ Has DApp            │      ✅      │      ❌      │ We win!     │
+└─────────────────────┴──────────────┴──────────────┴─────────────┘
 ```
 
 **TODO**:
-- [ ] Add comparison benchmarks
+- [x] Add comparison benchmarks ✅ (BENCHMARK.md)
 - [ ] Document API compatibility
 - [ ] Create migration guide from Privacy Cash
 - [ ] Record demo video (max 3 minutes)
+
+**Demo Video Outline** (3 min):
+1. **Intro** (30s): "privacy-zig - Faster, smaller Privacy Cash implementation"
+2. **Benchmark** (30s): Show size/CU comparison
+3. **DApp Demo** (90s): 
+   - Connect wallet
+   - One-click anonymous transfer
+   - Show deposit/withdraw flow
+   - Show notes management
+4. **Code** (20s): Show clean Zig code vs Rust
+5. **Outro** (10s): Links, call to action
 
 ---
 
@@ -204,23 +240,35 @@ privacy-zig/
 
 ---
 
-## Submission Requirements
+## Submission Checklist
 
 - [x] Open source code (Apache 2.0)
 - [x] Integrate Solana with privacy-preserving technologies
-- [x] Deploy to Solana devnet/testnet
+- [x] Deploy to Solana testnet
+- [x] Benchmark comparison (BENCHMARK.md)
 - [ ] Demo video (max 3 minutes)
-- [ ] Documentation for running/using project
+- [ ] API compatibility documentation
+- [ ] Migration guide
 
-## Timeline
+## Live Testnet Deployment
 
-| Date | Milestone |
-|------|-----------|
-| TBD | Hackathon deadline |
-| - | Choose strategy |
-| - | Implement additions |
-| - | Record demo video |
-| - | Submit |
+| Component | Address |
+|-----------|---------|
+| Program ID | `Dz82AAVPumnUys5SQ8HMat5iD6xiBVMGC2xJiJdZkpbT` |
+| Tree Account | `2h8oJdtfe9AE8r3Dmp49iBruUMfQQMmo6r63q79vxUN1` |
+| Global Config | `9qQELDcp6Z48tLpsDs6RtSQbYx5GpquxB4staTKQz15i` |
+| Pool Vault | `Cd6ntF7dtCqWiEnitLyukEVKN7VaCVkF1ta9VryP2zYq` |
+
+## DApp Features
+
+| Page | Feature |
+|------|---------|
+| `/transfer` | One-click anonymous transfer |
+| `/deposit` | Deposit with note saved to localStorage |
+| `/withdraw` | Withdraw using saved notes |
+| `/notes` | Manage, export, import notes |
+
+---
 
 ## Resources to Study
 
@@ -237,28 +285,43 @@ privacy-zig/
 ### Research
 - [ZK Architecture on Solana](https://arxiv.org/abs/2511.00415)
 
+---
+
 ## Competition Analysis
 
-| Project | Tech | Status |
-|---------|------|--------|
-| Privacy Cash | Rust/Anchor + Circom | Active, no frontend |
-| Arcium | MPC network | Production |
-| encrypt.trade | TEEs | Production |
-| Umbra | Shielded pools (Arcium) | Production |
-| Hush | Stealth addresses | Active |
-| **privacy-zig** | **Zig + Circom** | **Testnet** |
+| Project | Tech | Frontend | Status |
+|---------|------|----------|--------|
+| Privacy Cash | Rust/Anchor + Circom | ❌ None | SDK only |
+| Arcium | MPC network | ✅ | Production |
+| encrypt.trade | TEEs | ✅ | Production |
+| Umbra | Shielded pools (Arcium) | ✅ | Production |
+| Hush | Stealth addresses | ✅ | Active |
+| **privacy-zig** | **Zig + Circom** | **✅ Full DApp** | **Testnet** |
 
 ## Our Unique Value Proposition
 
-1. **Performance**: Fastest ZK verification on Solana (Zig > Rust)
-2. **Compatibility**: Drop-in replacement for Privacy Cash
-3. **Simplicity**: One-click anonymous transfers
-4. **Developer-friendly**: Clean codebase, good docs
+1. **Performance**: 5.7x smaller program, 8-30x less framework overhead
+2. **Compatibility**: Drop-in replacement for Privacy Cash circuits
+3. **Complete Solution**: Full DApp included (Privacy Cash has none!)
+4. **Developer-friendly**: Clean Zig code, good documentation
+5. **Cost Savings**: 2.8 SOL less deployment rent
 
 ---
 
-## Decision Needed
+## Next Steps
 
-- [ ] Which bounty/track to target?
-- [ ] What additional features to build?
-- [ ] Demo video content and style?
+1. [ ] Decide on target bounty (recommend: Privacy Cash $6k)
+2. [ ] Write API compatibility docs
+3. [ ] Create migration guide
+4. [ ] Record 3-minute demo video
+5. [ ] Submit before deadline
+
+## Timeline
+
+| Task | Time Estimate |
+|------|---------------|
+| API docs | 2-3 hours |
+| Migration guide | 2-3 hours |
+| Demo video | 3-4 hours |
+| Final testing | 1-2 hours |
+| **Total** | **8-12 hours** |
