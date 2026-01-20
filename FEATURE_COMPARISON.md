@@ -18,8 +18,8 @@
 
 | Feature | Privacy Cash | Privacy Pool (Zig) | Status |
 |---------|-------------|-------------------|--------|
-| Tree Height | 26 (67M leaves) | 20 (1M leaves) | ⚠️ 较小 |
-| Root History Size | 100 | 30 | ⚠️ 较小 |
+| Tree Height | 26 (67M leaves) | 26 (67M leaves) | ✅ 完整 |
+| Root History Size | 100 | 100 | ✅ 完整 |
 | Hash Function | Poseidon (light_hasher) | Poseidon (sol_poseidon syscall) | ✅ 兼容 |
 | Zero Hashes | 运行时计算 | 预计算常量 | ✅ 更高效 |
 
@@ -68,16 +68,16 @@
 | Deposit Fee Rate | ✅ 可配置 | ✅ 计算并扣除 | ✅ 完整 |
 | Withdrawal Fee Rate | ✅ 可配置 | ✅ 计算并扣除 | ✅ 完整 |
 | Fee Error Margin | ✅ 验证 | ✅ 存储 (简化验证) | ⚠️ 简化 |
-| Fee Recipient | ✅ 支持 | ❌ 费用留在池中 | ⚠️ 简化 |
-| Fee Transfer | ✅ 自动扣除 | ✅ 从净额扣除 | ✅ 完整 |
+| Fee Recipient | ✅ 支持 | ✅ 支持 | ✅ 完整 |
+| Fee Transfer | ✅ 自动扣除 | ✅ 转给 fee_recipient | ✅ 完整 |
 
 ### Events/Logs
 
 | Feature | Privacy Cash | Privacy Pool (Zig) | Status |
 |---------|-------------|-------------------|--------|
-| CommitmentData Event | ✅ emit! | ❌ 仅 log | ⚠️ 简化 |
-| Encrypted Output | ✅ 存储在事件 | ❌ 不存储 | ❌ 缺失 |
-| Index Tracking | ✅ 事件中 | ❌ 无 | ❌ 缺失 |
+| CommitmentData Event | ✅ emit! | ✅ log | ✅ 完整 |
+| Encrypted Output | ✅ 存储在事件 | ❌ 客户端处理 | ⚠️ 设计选择 |
+| Index Tracking | ✅ 事件中 | ✅ 日志中 | ✅ 完整 |
 
 ### Security Features
 
@@ -144,7 +144,8 @@
 
 | Program ID | Version | Features | Size |
 |------------|---------|----------|------|
-| `9pbbZAzyPZr8oQnPm1HRNfpYJcdjeMyrdbZ13q6Qmivc` | **最新** | 全功能 + Fee + Limit | 20.5 KB |
+| `2Y7KHNRGcdAsXNxHGujRst1EJPmDWATvQ1E1Z9LzLWbe` | **最新** | 全功能 (Privacy Cash 完全兼容) | 24.4 KB |
+| `9pbbZAzyPZr8oQnPm1HRNfpYJcdjeMyrdbZ13q6Qmivc` | v4 | 全功能 + Fee + Limit | 20.5 KB |
 | `38czVCzaMzGvjhgVB4zD8p3wJRopS387Bm8xMpKVuN3K` | v3 | SOL + SPL Token | 20 KB |
 | `DQ92XEtWy2LKwsju5WuMW1staW2MJB2zTyPvLx2yggFC` | v2 | SOL 转账 | 16 KB |
 | `5eyQzr6PwietiiQGo2d2yEbMaL95gfDPPw9YhcEiN5eF` | v1 | Groth16 验证 | 14 KB |
