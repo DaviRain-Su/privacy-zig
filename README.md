@@ -186,6 +186,7 @@ Uses Privacy Cash's `transaction2.circom` which proves:
 - [Tornado Cash Design](https://docs.tornado.cash/)
 - [anchor-zig](https://github.com/AminMortezaie/anchor-zig)
 - [solana-zig SDK](https://github.com/solana-zig/solana-zig)
+- [Solana zkLogin + Passkey 概要](docs/solana-zklogin-passkey.md)
 
 ## License
 
